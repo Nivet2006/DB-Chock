@@ -1,0 +1,32 @@
+# Dependency directories
+node_modules/
+jspm_packages/
+web_modules/
+
+# Local configuration / environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+
+# Runtime outputs & screenshots
+screenshots/
+uploads/
+generated_receipts/
+logs/
+output.csv
+
+# Keep directory structures but ignore contents
+!screenshots/.gitkeep
+!uploads/.gitkeep
+!generated_receipts/.gitkeep
+!logs/.gitkeep
+
+# System and editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log

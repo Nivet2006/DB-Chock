@@ -1,0 +1,12 @@
+# Proxy list for Estralis Bot
+# One proxy per line. Supported formats:
+#   socks5://ip:port
+#   http://ip:port
+#   http://user:pass@ip:port
+#   socks5://user:pass@ip:port
+#
+# Free SOCKS5 proxies (replace with working ones):
+# socks5://103.152.112.120:5765
+# socks5://192.111.137.37:18762
+#
+# If using Tor, use --proxy tor instead of this file

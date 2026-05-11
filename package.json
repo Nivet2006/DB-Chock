@@ -1,0 +1,26 @@
+{
+  "name": "estralis-bot",
+  "version": "1.0.0",
+  "description": "Playwright automation bot for Estralis Fest 2026 registration",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js --parallel 10 --proxy tor",
+    "start:fast": "node index.js --parallel 20 --proxy tor",
+    "start:safe": "node index.js --parallel 5",
+    "test": "npx playwright test",
+    "dashboard": "node dashboard/server.js",
+    "tunnel": "cloudflared tunnel --url http://localhost:4000",
+    "live": "concurrently \"node dashboard/server.js\" \"node index.js --parallel 10 --proxy tor\"",
+    "install-browsers": "npx playwright install chromium",
+    "setup": "npm install && npx playwright install chromium"
+  },
+  "dependencies": {
+    "@faker-js/faker": "^9.7.0",
+    "@playwright/test": "^1.52.0",
+    "canvas": "^3.1.0",
+    "sharp": "^0.34.1"
+  },
+  "keywords": ["playwright", "automation", "estralis"],
+  "author": "",
+  "license": "ISC"
+}
