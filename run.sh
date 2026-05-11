@@ -112,10 +112,14 @@ get_name_count() {
 }
 
 check_tor() {
-  if systemctl is-active --quiet tor 2>/dev/null || pgrep -x tor >/dev/null 2>&1; then
+  if systemctl is-active --quiet tor 2>/dev/null || pgrep -x tor >/dev/null 2>&1 || tasklist.exe 2>/dev/null | grep -i "tor.exe" >/dev/null 2>&1 || curl -s --socks5 127.0.0.1:9050 https://check.torproject.org/ &>/dev/null; then
     echo -e "  Tor: ${GREEN}RUNNING${NC}"
   else
-    echo -e "  Tor: ${RED}STOPPED${NC} — start with: sudo systemctl start tor"
+    if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OSTYPE" == "win32" ]]; then
+      echo -e "  Tor: ${RED}STOPPED${NC} — start Tor or run 'tor' in terminal"
+    else
+      echo -e "  Tor: ${RED}STOPPED${NC} — start with: sudo systemctl start tor"
+    fi
   fi
 }
 
@@ -163,9 +167,13 @@ while true; do
       NAME_COUNT=$(get_name_count)
       echo -n "Parallel workers? [10]: "; read -r workers
       workers=${workers:-10}
-      if ! pgrep -x tor >/dev/null 2>&1; then
+      if ! pgrep -x tor >/dev/null 2>&1 && ! tasklist.exe 2>/dev/null | grep -i "tor.exe" >/dev/null 2>&1; then
         log_warn "Starting Tor..."
-        sudo systemctl start tor 2>/dev/null || sudo tor &
+        if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OSTYPE" == "win32" ]]; then
+          start tor 2>/dev/null || tor &
+        else
+          sudo systemctl start tor 2>/dev/null || sudo tor &
+        fi
         sleep 3
       fi
       log_step "Running ALL $NAME_COUNT names, $workers parallel, Tor IP rotation..."
@@ -246,7 +254,12 @@ while true; do
     9) run_setup ;;
     10)
       log_step "Restarting Tor..."
-      sudo systemctl restart tor 2>/dev/null || (sudo killall tor 2>/dev/null; sudo tor &)
+      if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OSTYPE" == "win32" ]]; then
+        taskkill.exe /f /im tor.exe 2>/dev/null || true
+        start tor 2>/dev/null || tor &
+      else
+        sudo systemctl restart tor 2>/dev/null || sudo service tor restart 2>/dev/null || (sudo killall tor 2>/dev/null; sudo tor &)
+      fi
       sleep 2; check_tor
       ;;
     11)

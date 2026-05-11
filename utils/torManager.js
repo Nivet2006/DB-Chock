@@ -128,17 +128,30 @@ function rotateCircuit(controlPort) {
 }
 
 function ensureSystemTor() {
+  const isWin = process.platform === 'win32';
   try {
-    execSync('pgrep -x tor', { stdio: 'pipe' });
+    if (isWin) {
+      execSync('tasklist | findstr /I tor.exe', { stdio: 'pipe' });
+    } else {
+      execSync('pgrep -x tor', { stdio: 'pipe' });
+    }
     console.log('[TOR] System Tor is running on port 9050');
     return true;
   } catch {
     try {
-      execSync('sudo systemctl start tor', { timeout: 10000, stdio: 'pipe' });
+      if (isWin) {
+        execSync('start tor', { timeout: 10000, stdio: 'pipe' });
+      } else {
+        execSync('sudo systemctl start tor || sudo service tor start', { timeout: 10000, stdio: 'pipe' });
+      }
       console.log('[TOR] Started system Tor');
       return true;
     } catch {
-      console.log('[TOR] Could not start Tor — install with: sudo apt install tor');
+      if (isWin) {
+        console.log('[TOR] Could not start Tor — make sure tor is installed and in PATH');
+      } else {
+        console.log('[TOR] Could not start Tor — install with: sudo apt install tor');
+      }
       return false;
     }
   }
