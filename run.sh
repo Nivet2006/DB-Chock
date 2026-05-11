@@ -105,11 +105,7 @@ run_setup() {
   log_step "Setup complete!"
 }
 
-get_name_count() {
-  if [ -f "$SCRIPT_DIR/NAMES.TXT" ]; then
-    grep -c . "$SCRIPT_DIR/NAMES.TXT" 2>/dev/null || echo 0
-  else echo 0; fi
-}
+
 
 check_tor() {
   if systemctl is-active --quiet tor 2>/dev/null || pgrep -x tor >/dev/null 2>&1 || tasklist.exe 2>/dev/null | grep -i "tor.exe" >/dev/null 2>&1 || curl -s --socks5 127.0.0.1:9050 https://check.torproject.org/ &>/dev/null; then
@@ -124,8 +120,7 @@ check_tor() {
 }
 
 show_menu() {
-  NAME_COUNT=$(get_name_count)
-  echo -e "${BOLD}─── RUN OPTIONS ─── (${YELLOW}${NAME_COUNT} names in NAMES.TXT${NC}${BOLD}) ──${NC}"
+  echo -e "${BOLD}─── RUN OPTIONS ─── (${YELLOW}all names in NAMES.TXT${NC}${BOLD}) ──${NC}"
   echo -e "  ${CYAN}1)${NC}  Run ALL names + Tor (parallel)     ${GREEN}(RECOMMENDED)${NC}"
   echo -e "  ${CYAN}2)${NC}  Run custom count (parallel, no proxy)"
   echo -e "  ${CYAN}3)${NC}  Run with proxy list (proxies.txt)"
@@ -164,7 +159,6 @@ while true; do
 
   case $choice in
     1)
-      NAME_COUNT=$(get_name_count)
       echo -n "Parallel workers? [10]: "; read -r workers
       workers=${workers:-10}
       if ! pgrep -x tor >/dev/null 2>&1 && ! tasklist.exe 2>/dev/null | grep -i "tor.exe" >/dev/null 2>&1; then
@@ -176,7 +170,7 @@ while true; do
         fi
         sleep 3
       fi
-      log_step "Running ALL $NAME_COUNT names, $workers parallel, Tor IP rotation..."
+      log_step "Running ALL names in NAMES.TXT, $workers parallel, Tor IP rotation..."
       node "$SCRIPT_DIR/index.js" --parallel "$workers" --proxy tor
       ;;
     2)
