@@ -1,4 +1,3 @@
-
 const { chromium } = require('@playwright/test');
 const path = require('path');
 const fs = require('fs');
@@ -42,6 +41,9 @@ function log(msg) {
   console.log(line);
   try { fs.appendFileSync(LOG_FILE, line + '\n'); } catch {}
 }
+
+// A simple helper that resolves after a specified number of milliseconds
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const BASE_URL = 'https://estralisfest2026.vercel.app/';
 
@@ -87,7 +89,9 @@ async function snap(page, name) {
   const file = path.join(__dirname, 'screenshots', `${name}_${Date.now()}.png`);
   try { await page.screenshot({ path: file, fullPage: false }); } catch {}
   return file;
-}async function scrollModalToBottom(page) {
+}
+
+async function scrollModalToBottom(page) {
   await page.evaluate(() => {
     const allEls = document.querySelectorAll('*');
     for (const el of allEls) {
@@ -267,7 +271,6 @@ async function runRegistration(browser, regIndex, totalCount, targetEventIndex =
     let scrapedAmount = '₹299';
     try {
       const pageText = await page.innerText('body');
-
       const amountMatch = pageText.match(/(?:₹|Rs\.?|INR)\s*(\d+)/i) || pageText.match(/(\d+)\s*(?:INR|rupees)/i);
       if (amountMatch) {
         scrapedAmount = `₹${amountMatch[1]}`;
@@ -389,6 +392,24 @@ async function runEventRegistrations(browser, eventIndex, targetCount) {
       log(`[SCHEDULER] Completed batch. Event ${eventIndex + 1} has ${successful}/${targetCount} successes.`);
     }
   }
+}
+
+async function startWorkerPool(totalWorkers, staggerIntervalMs) {
+  const workers = [];
+  for (let i = 0; i < totalWorkers; i++) {
+    console.log(`Initializing Worker ${i + 1}...`);
+    workers.push(runWorker(i));
+    if (i < totalWorkers - 1) {
+      await delay(staggerIntervalMs);
+    }
+  }
+  await Promise.all(workers);
+  console.log("All workers finished execution.");
+}
+
+async function runWorker(id) {
+  console.log(`Worker ${id + 1} started.`);
+  // Perform work...
 }
 
 (async () => {
