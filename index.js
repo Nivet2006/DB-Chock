@@ -1,88 +1,39 @@
 const { chromium } = require('@playwright/test');
 const path = require('path');
 const fs = require('fs');
-const { execSync } = require('child_process');
 
 const { generateRegistrationData, humanDelay, randomInt } = require('./utils/randomData');
 const { generatePaymentReceipt } = require('./utils/paymentGenerator');
 const { appendRecord, ensureCsvFile } = require('./utils/csv');
-const { spawnTorInstances, rotateCircuit, ensureSystemTor } = require('./utils/torManager');
 
-const args = process.argv.slice(2);
-
-function getArg(flag) {
-  const idx = args.indexOf(flag);
-  if (idx !== -1 && args[idx + 1]) return args[idx + 1];
-  return null;
-}
-
-function hasFlag(flag) {
-  return args.includes(flag);
-}
-
-const cliCount = args.find((a) => /^\d+$/.test(a));
-const COUNT = cliCount
-  ? parseInt(cliCount, 10)
-  : fs.readFileSync(path.join(__dirname, 'NAMES.TXT'), 'utf-8').split('\n').filter(l => l.trim()).length;
-const PARALLEL = parseInt(getArg('--parallel') || getArg('-p'), 10) || 1;
-const PROXY_MODE = getArg('--proxy') || 'none';
-const HEADLESS = hasFlag('--headful') ? false : process.env.HEADLESS !== 'false';
-const IS_INFINITE = hasFlag('--infinite') || hasFlag('--infinity');
-
-const DIRS = ['uploads', 'logs', 'generated_receipts', 'screenshots', 'logos'];
-for (const dir of DIRS) {
-  const p = path.join(__dirname, dir);
+const BASE_URL = 'https://estralisfest2026.vercel.app';
+const usedEvents = new Set();
+const TOR_ARG = process.argv.find(a => a.startsWith('--tor-ports'));
+const TOR_PORTS = TOR_ARG ? TOR_ARG.split('=')[1]?.split(',').map(Number).filter(Boolean) : (process.argv.includes('--tor') ? [9050] : []);
+const DIRS = ['uploads', 'logs', 'generated_receipts', 'screenshots'];
+for (const d of DIRS) {
+  const p = path.join(__dirname, d);
   if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
 }
 
 const LOG_FILE = path.join(__dirname, 'logs', `run_${Date.now()}.log`);
+const ONGOING_FILE = path.join(__dirname, 'logs', 'ongoing.json');
+
+function writeOngoing(entries) {
+  try { fs.writeFileSync(ONGOING_FILE, JSON.stringify(entries), 'utf-8'); } catch {}
+}
+
+function removeOngoing(entry) {
+  try {
+    const prev = JSON.parse(fs.readFileSync(ONGOING_FILE, 'utf-8') || '[]');
+    writeOngoing(prev.filter(e => !(e.name === entry.name && e.email === entry.email)));
+  } catch {}
+}
+
 function log(msg) {
   const line = `[${new Date().toISOString()}] ${msg}`;
   console.log(line);
-  try { fs.appendFileSync(LOG_FILE, line + '\n'); } catch {}
-}
-
-// A simple helper that resolves after a specified number of milliseconds
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const BASE_URL = 'https://estralisfest2026.vercel.app/';
-
-let torInstances = [];
-let torCleanup = null;
-let proxyList = [];
-let proxyIndex = 0;
-
-function loadProxyList() {
-  const proxyFile = path.join(__dirname, 'proxies.txt');
-  if (!fs.existsSync(proxyFile)) {
-    log('[PROXY] proxies.txt not found — create it with one proxy per line');
-    process.exit(1);
-  }
-  const proxies = fs.readFileSync(proxyFile, 'utf-8')
-    .split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
-  log(`[PROXY] Loaded ${proxies.length} proxies from proxies.txt`);
-  return proxies;
-}
-
-function getProxy(workerIndex) {
-  if (PROXY_MODE === 'tor' && torInstances.length > 0) {
-    const inst = torInstances[workerIndex % torInstances.length];
-    return { server: `socks5://127.0.0.1:${inst.port}` };
-  }
-  if (PROXY_MODE === 'file') {
-    if (proxyList.length === 0) proxyList = loadProxyList();
-    const proxy = proxyList[proxyIndex % proxyList.length];
-    proxyIndex++;
-    return { server: proxy };
-  }
-  return null;
-}
-
-function rotateWorkerIP(workerIndex) {
-  if (PROXY_MODE === 'tor' && torInstances.length > 0) {
-    const inst = torInstances[workerIndex % torInstances.length];
-    if (inst.controlPort) rotateCircuit(inst.controlPort);
-  }
+  fs.appendFileSync(LOG_FILE, line + '\n');
 }
 
 async function snap(page, name) {
@@ -91,249 +42,343 @@ async function snap(page, name) {
   return file;
 }
 
-async function scrollModalToBottom(page) {
-  await page.evaluate(() => {
-    const allEls = document.querySelectorAll('*');
-    for (const el of allEls) {
-      const style = window.getComputedStyle(el);
-      if (
-        (style.overflowY === 'auto' || style.overflowY === 'scroll') &&
-        el.scrollHeight > el.clientHeight + 50
-      ) {
-        el.scrollTop = el.scrollHeight;
-      }
-    }
-  });
-  await page.waitForTimeout(10);
-}
-
-async function scrollModalGradually(page) {
-  await page.evaluate(() => {
-    const allEls = document.querySelectorAll('*');
-    for (const el of allEls) {
-      const style = window.getComputedStyle(el);
-      if (
-        (style.overflowY === 'auto' || style.overflowY === 'scroll') &&
-        el.scrollHeight > el.clientHeight + 50
-      ) {
-        el.scrollTop = el.scrollHeight;
-      }
-    }
-  });
-  await page.waitForTimeout(10);
-}
-
-async function clickByText(page, text) {
-  const selectors = [
-    `text="${text}"`,
-    `button:has-text("${text}")`,
-    `a:has-text("${text}")`,
-    `[role="button"]:has-text("${text}")`,
-  ];
-  for (const sel of selectors) {
-    try {
-      const el = page.locator(sel).first();
-      await el.waitFor({ state: 'visible', timeout: 5000 });
-      await el.click({ timeout: 8000 });
-      return true;
-    } catch { continue; }
-  }
-
-  const clicked = await page.evaluate((t) => {
-    const btns = [...document.querySelectorAll('button, a, div, span')];
-    const btn = btns.find((b) => b.textContent.toUpperCase().includes(t.toUpperCase()) && b.offsetParent !== null);
-    if (btn) { btn.click(); return true; }
-    return false;
-  }, text);
-  if (clicked) return true;
-  throw new Error(`Element not found: "${text}"`);
-}
-
-async function fillByPlaceholder(page, placeholder, value) {
+async function fillField(page, placeholder, value, label) {
+  log(`  → ${label}: ${value}`);
   const input = page.locator(`input[placeholder*="${placeholder}" i], textarea[placeholder*="${placeholder}" i]`).first();
-  await input.waitFor({ state: 'visible', timeout: 5000 });
+  await input.waitFor({ state: 'visible', timeout: 8000 });
   await input.fill(value);
+  await page.waitForTimeout(randomInt(80, 200));
 }
 
-async function runRegistration(browser, regIndex, totalCount, targetEventIndex = null) {
+function pickRandom(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+async function runRegistration(browser, regIndex, totalCount) {
   const regData = generateRegistrationData();
-  let eventName = 'Unknown Event';
+  let eventName = 'Unknown';
 
   const ctxOpts = {
     viewport: { width: 1280, height: 900 },
     userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
   };
-
-  const proxy = getProxy(regIndex);
-  if (proxy) ctxOpts.proxy = proxy;
-
+  if (TOR_PORTS.length) {
+    const port = TOR_PORTS[regIndex % TOR_PORTS.length];
+    ctxOpts.proxy = { server: `socks5://127.0.0.1:${port}` };
+  }
   const context = await browser.newContext(ctxOpts);
   const page = await context.newPage();
-  page.setDefaultTimeout(25000);
+  page.setDefaultTimeout(60000);
 
-  const tag = `[${regIndex + 1}/${totalCount}]`;
+  const apiCalls = [];
+  page.on('response', r => {
+    const u = r.url();
+    if (u.includes('estralis') && u.includes('/api/')) {
+      apiCalls.push({ url: u, status: r.status() });
+    }
+  });
+
+  const tag = `[${regIndex + 1}${isFinite(totalCount) ? '/' + totalCount : ''}]`;
+
+  let ongoingEntry = { name: regData.fullName, email: regData.email, event: 'Loading...', startedAt: new Date().toISOString() };
+  try {
+    const prev = JSON.parse(fs.readFileSync(ONGOING_FILE, 'utf-8') || '[]');
+    prev.push(ongoingEntry);
+    writeOngoing(prev);
+  } catch {}
 
   try {
-    log(`${tag} ▶ Starting — ${regData.fullName} | ${regData.email}${proxy ? ' | Proxy: ' + proxy.server : ''}`);
+    log(`${tag} ▶ ${regData.fullName} | ${regData.email}`);
 
-    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await humanDelay(page, 100, 300);
+    log(`${tag} 🌐 Loading site...`);
+    await page.goto(BASE_URL + '#events', { waitUntil: 'networkidle', timeout: 60000 });
+    await page.waitForTimeout(2000);
+    log(`${tag} ✅ Page loaded`);
 
-    await clickByText(page, 'Events');
-    await humanDelay(page, 100, 300);
-    await page.waitForTimeout(200);
+    const skipEvents = ['DJ NIGHT', 'BATTLE OF BANDS', 'CLASSICAL GROUP', 'WESTERN GROUP', 'BGMI', 'FASHION', 'TREASURE HUNT'];
+    let eventSeeds = [];
 
-    await page.evaluate(() => window.scrollBy(0, 500));
-    await page.waitForTimeout(100);
+    log(`${tag} 🔍 Finding event cards...`);
 
-    const accessBtns = page.locator('text="Access Protocol"');
-    try {
-      await accessBtns.first().waitFor({ state: 'visible', timeout: 15000 });
-    } catch (e) {
-      throw new Error('Timeout waiting for Access Protocol buttons to load (slow Tor network)');
+    let card = null;
+    let modal = null;
+
+    for (let retryEvent = 0; retryEvent < 10; retryEvent++) {
+      if (retryEvent > 0) {
+        log(`${tag} 🔄 Trying another event...`);
+        if (modal) await page.evaluate(() => {
+          const c = document.querySelector('.fixed.inset-0');
+          if (c) c.querySelector('button')?.click();
+        });
+        await page.waitForTimeout(500);
+      }
+
+      const cards = page.locator('text=Access Protocol');
+      await cards.first().waitFor({ state: 'attached', timeout: 30000 });
+
+      if (eventSeeds.length === 0) {
+        for (let i = 0; i < await cards.count(); i++) {
+          let n;
+          try {
+            const p = cards.nth(i).locator('xpath=ancestor::div[contains(@class,"border-l")]');
+            n = await p.locator('h3').first().textContent({ timeout: 1000 });
+          } catch { n = ''; }
+          if (!skipEvents.some(c => n.toUpperCase().includes(c)) && !usedEvents.has(n.toUpperCase())) eventSeeds.push({ idx: i, name: n || `Event ${i + 1}` });
+        }
+      }
+
+      if (eventSeeds.length === 0) throw new Error('No suitable events');
+      const pick = eventSeeds.splice(randomInt(0, eventSeeds.length - 1), 1)[0];
+      card = cards.nth(pick.idx);
+      try {
+        const parent = card.locator('xpath=ancestor::div[contains(@class,"border-l")]');
+        eventName = await parent.locator('h3').first().textContent({ timeout: 2000 });
+      } catch { eventName = pick.name; }
+      log(`${tag} 🎯 Trying: "${eventName}"`);
+      ongoingEntry.event = eventName;
+      try {
+        const prev = JSON.parse(fs.readFileSync(ONGOING_FILE, 'utf-8') || '[]');
+        const idx = prev.findIndex(e => e.name === ongoingEntry.name && e.email === ongoingEntry.email);
+        if (idx >= 0) prev[idx].event = eventName;
+        writeOngoing(prev);
+      } catch {}
+
+      await card.scrollIntoViewIfNeeded();
+      await page.waitForTimeout(300);
+      await card.click({ force: true, noWaitAfter: true });
+      await page.waitForTimeout(2000);
+
+      modal = page.locator('.fixed.inset-0').filter({ has: page.locator('text=Read Protocol') }).first();
+      await modal.waitFor({ state: 'attached', timeout: 10000 });
+      log(`${tag} ✅ Modal opened for "${eventName}"`);
+      break;
     }
-    const btnCount = await accessBtns.count();
-    if (btnCount === 0) throw new Error('No Access Protocol buttons');
-    const btnIdx = targetEventIndex !== null ? (targetEventIndex % btnCount) : randomInt(0, Math.min(btnCount - 1, 5));
 
-    try {
-      const card = accessBtns.nth(btnIdx).locator('xpath=ancestor::div[contains(@class,"card") or contains(@class,"event")]');
-      eventName = await card.locator('h2, h3, [class*="title"]').first().textContent({ timeout: 1500 });
-    } catch { eventName = `Event ${btnIdx + 1}`; }
+    log(`${tag} ✅ Modal confirmed (${eventName})`);
 
-    await accessBtns.nth(btnIdx).scrollIntoViewIfNeeded();
-    await humanDelay(page, 50, 150);
-    await accessBtns.nth(btnIdx).click();
-    await humanDelay(page, 150, 350);
-
-    await page.waitForTimeout(200);
-    await scrollModalGradually(page);
-    await humanDelay(page, 50, 150);
-    try { await clickByText(page, 'Read Protocol'); } catch {
+    log(`${tag} 📜 Scrolling modal before clicking anything...`);
+    for (let s = 0; s < 15; s++) {
       await page.evaluate(() => {
-        const b = [...document.querySelectorAll('button,a,div')].find((e) => e.textContent.toLowerCase().includes('read protocol'));
-        if (b) b.click();
+        const modal = [...document.querySelectorAll('*')].find(e => e.classList.contains('fixed') && e.classList.contains('inset-0'));
+        if (!modal) return;
+        for (const el of modal.querySelectorAll('*')) {
+          const style = window.getComputedStyle(el);
+          if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 20) {
+            el.scrollTop += 150;
+          }
+        }
+      });
+      await page.waitForTimeout(80);
+    }
+    log(`${tag} ✅ Scrolled modal`);
+
+    log(`${tag} 📖 Clicking "Read Protocol"...`);
+    try {
+      const rpBtn = page.locator('.fixed.inset-0 button', { hasText: 'Read Protocol' }).first();
+      await rpBtn.waitFor({ state: 'visible', timeout: 5000 });
+      await rpBtn.click({ noWaitAfter: true });
+    } catch {
+      log(`${tag}   Normal click failed, trying evaluate fallback...`);
+      await page.evaluate(() => {
+        const modal = [...document.querySelectorAll('*')].find(e => e.classList.contains('fixed') && e.classList.contains('inset-0'));
+        if (!modal) return;
+        const btn = [...modal.querySelectorAll('button')].find(b => b.textContent.toLowerCase().includes('read protocol'));
+        if (btn) btn.click();
       });
     }
-    await humanDelay(page, 150, 350);
+    await page.waitForTimeout(2000);
 
-    await scrollModalGradually(page);
-    await scrollModalToBottom(page);
-    await humanDelay(page, 100, 300);
+    const afterUrl = page.url();
+    const afterTitle = await page.title();
+    log(`${tag}   After Read Protocol → URL: ${afterUrl} | Title: ${afterTitle}`);
 
-    let confirmed = false;
-    for (let attempt = 0; attempt < 5 && !confirmed; attempt++) {
-      await scrollModalToBottom(page);
+    const modalAfter = await page.locator('.fixed.inset-0').count();
+    log(`${tag}   Modals open: ${modalAfter}`);
+
+    await snap(page, `read_protocol_${regIndex}`);
+
+    const bodyText = await page.locator('body').innerText();
+    log(`${tag}   Body preview: ${bodyText.slice(0, 300).replace(/\n/g, ' ')}`);
+
+    log(`${tag} 📜 Scrolling for "Confirm Registry"...`);
+    let clicked = false;
+    for (let attempt = 0; attempt < 20 && !clicked; attempt++) {
+      await page.evaluate(() => {
+        const modal = [...document.querySelectorAll('*')].find(e => e.classList.contains('fixed') && e.classList.contains('inset-0'));
+        if (modal) {
+          for (const el of modal.querySelectorAll('*')) {
+            const style = window.getComputedStyle(el);
+            if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 20) {
+              el.scrollTop += 200;
+            }
+          }
+        }
+        window.scrollBy(0, 300);
+      });
       await page.waitForTimeout(150);
-      confirmed = await page.evaluate(() => {
-        const b = [...document.querySelectorAll('button,a,div,span')].find(
-          (e) => e.textContent.trim().toUpperCase().includes('CONFIRM REGISTRY') && e.offsetParent !== null
-        );
-        if (b) { b.scrollIntoView({ block: 'center' }); b.click(); return true; }
-        return false;
-      });
-      if (!confirmed) {
-        try {
-          const btn = page.locator('text=/confirm registry/i').first();
-          await btn.scrollIntoViewIfNeeded({ timeout: 1000 });
-          await btn.click({ timeout: 2000 });
-          confirmed = true;
-        } catch { await page.waitForTimeout(200); }
+
+      const m = [...(await page.locator('.fixed.inset-0').count() > 0 ? [page.locator('.fixed.inset-0').first()] : [])];
+      const btn = page.locator('button', { hasText: 'Confirm Registry' }).first();
+      if (await btn.count() > 0) {
+        log(`${tag}   Found Confirm Registry (attempt ${attempt + 1})`);
+        try { await btn.click({ timeout: 3000, force: true, noWaitAfter: true }); } catch {
+          await btn.evaluate(b => b.click());
+        }
+        clicked = true;
+        break;
       }
     }
-    if (!confirmed) throw new Error('Could not click Confirm Registry');
-    await humanDelay(page, 150, 350);
 
-    await page.waitForTimeout(400);
-    await fillByPlaceholder(page, 'Name', regData.fullName);
-    await humanDelay(page, 50, 150);
-    await fillByPlaceholder(page, 'email', regData.email);
-    await humanDelay(page, 50, 150);
-    await fillByPlaceholder(page, 'Phone', regData.phone);
-    await humanDelay(page, 50, 150);
-    await fillByPlaceholder(page, 'College', regData.college);
-    await humanDelay(page, 50, 150);
-    await fillByPlaceholder(page, 'Sem', regData.semester);
-    await humanDelay(page, 50, 150);
-    await fillByPlaceholder(page, 'CSE', regData.branch);
-    await humanDelay(page, 50, 150);
+    if (!clicked) {
+      log(`${tag} ❌ Confirm Registry not found — full debug...`);
+      await snap(page, `debug_noconfirm_${regIndex}`);
 
-    await scrollModalToBottom(page);
-    await page.waitForTimeout(200);
-    try { await clickByText(page, 'CONTINUE TO PAYMENT'); } catch {
-      await page.evaluate(() => {
-        const b = [...document.querySelectorAll('button,a,div')].find((e) => e.textContent.toUpperCase().includes('CONTINUE TO PAYMENT'));
-        if (b) b.click();
+      const dump = await page.evaluate(() => {
+        const modals = [...document.querySelectorAll('.fixed.inset-0')];
+        const allBtns = [...document.querySelectorAll('button')].map(b => ({
+          text: b.textContent.trim().slice(0, 60),
+          visible: b.offsetHeight > 0,
+        }));
+        return { modalCount: modals.length, allButtons: allBtns, bodySample: document.body.innerText.slice(0, 2000) };
       });
-    }
-    await humanDelay(page, 400, 800);
+      log(`${tag}   Modals: ${dump.modalCount}`);
+      log(`${tag}   All buttons: ${JSON.stringify(dump.allButtons)}`);
+      log(`${tag}   Body: ${dump.bodySample.slice(0, 800)}`);
 
-    let scrapedAmount = '₹299';
-    try {
-      const pageText = await page.innerText('body');
-      const amountMatch = pageText.match(/(?:₹|Rs\.?|INR)\s*(\d+)/i) || pageText.match(/(\d+)\s*(?:INR|rupees)/i);
-      if (amountMatch) {
-        scrapedAmount = `₹${amountMatch[1]}`;
-        log(`${tag} [PAYMENT] Dynamically scraped payment amount: ${scrapedAmount}`);
-      } else {
-        log(`${tag} [PAYMENT] Could not scrape amount, defaulting to ${scrapedAmount}`);
+      const text = dump.bodySample || '';
+      if (text.toUpperCase().includes('SOLD OUT') || text.toUpperCase().includes('SOLD_OUT')) {
+        throw new Error('Event is SOLD OUT');
       }
-    } catch (scErr) {
-      log(`${tag} [PAYMENT] Error scraping amount: ${scErr.message}, defaulting to ${scrapedAmount}`);
+      throw new Error('Confirm Registry not found anywhere');
+    }
+    log(`${tag} ✅ "Confirm Registry" clicked`);
+    await page.waitForTimeout(1000);
+
+    log(`${tag} 📝 Filling form fields...`);
+    const visInputs = await page.evaluate(() =>
+      [...document.querySelectorAll('input')].filter(i => i.offsetHeight > 0).map(i => i.placeholder)
+    );
+    for (const placeholder of visInputs) {
+      if (/member|file/i.test(placeholder)) continue;
+      const ph = placeholder.toLowerCase();
+      if (/college|institution/.test(ph)) {
+        await fillField(page, placeholder, regData.college, 'College');
+      } else if (/email/.test(ph)) {
+        await fillField(page, placeholder, regData.email, 'Email');
+      } else if (/phone|mobile/.test(ph)) {
+        await fillField(page, placeholder, regData.phone, 'Phone');
+      } else if (/sem|year/.test(ph)) {
+        await fillField(page, placeholder, regData.semester, 'Semester');
+      } else if (/cse|branch|stream/.test(ph)) {
+        await fillField(page, placeholder, regData.branch, 'Branch');
+      } else if (/name/.test(ph) && !/team/.test(ph) && !/college/.test(ph) && !/linkedin/.test(ph)) {
+        await fillField(page, placeholder, regData.fullName, 'Name');
+      } else if (/linkedin/.test(ph)) {
+        continue;
+      } else if (/team.*(name|squad)/.test(ph)) {
+        await fillField(page, placeholder, `Team ${regData.fullName.split(' ')[0]}${randomInt(10, 99)}`, 'Team name');
+      }
     }
 
-    const receiptPath = await generatePaymentReceipt({
-      amount: scrapedAmount,
-      utr: regData.utr,
-      senderUpi: regData.senderUpi,
-      transactionId: regData.transactionId,
-      senderName: regData.fullName,
-      phone: regData.phone,
-    });
-
-    await page.waitForTimeout(400);
-    const fileInput = page.locator('input[type="file"]').first();
-    await fileInput.waitFor({ state: 'attached', timeout: 5000 });
-    await fileInput.setInputFiles(receiptPath);
-    await humanDelay(page, 100, 300);
-
-    await fillByPlaceholder(page, 'UTR', regData.utr);
-    await humanDelay(page, 50, 150);
-
-    try { await clickByText(page, 'COMPLETE REGISTRY'); } catch {
-      await page.evaluate(() => {
-        const b = [...document.querySelectorAll('button,a,div')].find((e) => e.textContent.toUpperCase().includes('COMPLETE'));
-        if (b) b.click();
-      });
-    }
-    await page.waitForTimeout(1200);
-
-    await snap(page, `ok_${regIndex}`);
-
-    let referenceNumber = '';
+    log(`${tag} 🔘 Clicking "CONTINUE TO PAYMENT" (trigger)...`);
     try {
-      const txt = await page.textContent('body');
-      const m = txt.match(/(?:reference|ticket|registration|id)[:\s#]*([A-Z0-9-]+)/i);
-      if (m) referenceNumber = m[1];
+      await page.locator('button', { hasText: 'CONTINUE TO PAYMENT' }).first().click({ timeout: 5000, noWaitAfter: true });
     } catch {}
+    await page.waitForTimeout(1500);
 
+    log(`${tag} 📤 Submitting form...`);
+    await page.evaluate(() => {
+      const form = document.querySelector('form');
+      if (form) form.requestSubmit();
+    });
+    await page.waitForTimeout(3000);
+
+    if (apiCalls.length > 0) {
+      for (const c of apiCalls) log(`${tag}   API: ${c.url} → ${c.status}`);
+    }
+
+    log(`${tag} 🔍 Checking for payment upload section...`);
+    await snap(page, `after_submit_${regIndex}`);
+
+    const afterSubmitDebug = await page.evaluate(() => {
+      const inputs = [...document.querySelectorAll('input')].map(i => ({ t: i.type, p: i.placeholder, n: i.name }));
+      return { inputs, text: document.body.innerText.slice(0, 1000) };
+    });
+    log(`${tag}   Inputs after submit: ${JSON.stringify(afterSubmitDebug.inputs)}`);
+
+    const hasPayInputs = afterSubmitDebug.inputs.some(i => i.t === 'file') && afterSubmitDebug.inputs.some(i => /utr/i.test(i.p));
+    if (hasPayInputs) {
+      log(`${tag} 💳 Payment upload section found!`);
+
+      let amount = '₹299';
+      const body = await page.locator('body').innerText();
+      const amtMatch = body.match(/(?:₹|Rs\.?|INR)\s*(\d{2,})/i);
+      if (amtMatch && parseInt(amtMatch[1]) >= 50) amount = `₹${amtMatch[1]}`;
+
+      const receiptPath = await generatePaymentReceipt({
+        amount, utr: regData.utr, senderUpi: regData.senderUpi,
+        transactionId: regData.transactionId, senderName: regData.fullName, phone: regData.phone,
+      });
+
+      await page.locator('input[type="file"]').first().setInputFiles(receiptPath);
+      await page.waitForTimeout(400);
+      log(`${tag} ✅ Receipt uploaded`);
+
+      const utrInp = page.locator('input[placeholder*="UTR" i]').first();
+      await utrInp.fill(regData.utr);
+      log(`${tag} ✅ UTR entered: ${regData.utr}`);
+
+      log(`${tag} 🔘 Clicking "SUBMIT REGISTRATION"...`);
+      try {
+        await page.locator('button', { hasText: /SUBMIT REGISTRATION|SUBMIT|COMPLETE/i }).first().click({ timeout: 8000, noWaitAfter: true });
+      } catch {
+        await page.evaluate(() => {
+          const b = [...document.querySelectorAll('button')].find(el => /submit|complete/i.test(el.textContent));
+          if (b) b.click();
+        });
+      }
+      await page.waitForTimeout(3000);
+      await snap(page, `submitted_${regIndex}`);
+
+      const finalText = await page.locator('body').innerText();
+      let ref = finalText.match(/(?:reference|ticket|registration|id)\s*[:\s#]*\s*([A-Z0-9]{6,})/i)?.[1] || '';
+      appendRecord({
+        eventName: eventName.trim(), fullName: regData.fullName, email: regData.email,
+        phone: regData.phone, college: regData.college, branch: regData.branch,
+        semester: regData.semester, utr: regData.utr, senderUpi: regData.senderUpi,
+        payeeUpi: regData.payeeUpi, referenceNumber: ref, status: 'SUCCESS',
+      });
+      usedEvents.add(eventName.trim().toUpperCase());
+      log(`${tag} ✅✅✅ SUCCESS — ${regData.fullName}${ref ? ' Ref:' + ref : ''}`);
+      removeOngoing(ongoingEntry);
+      await snap(page, `ok_${regIndex}`);
+      return true;
+    }
+
+    usedEvents.add(eventName.trim().toUpperCase());
+    const hasRef = afterSubmitDebug.text.match(/(?:reference|ticket|registration|id)\s*[:\s#]*\s*([A-Z0-9]{6,})/i);
+    const ref = hasRef?.[1] || '';
+
+    log(`${tag} ✅ SUCCESS${ref ? ' Ref:' + ref : ''}`);
     appendRecord({
       eventName: eventName.trim(), fullName: regData.fullName, email: regData.email,
       phone: regData.phone, college: regData.college, branch: regData.branch,
       semester: regData.semester, utr: regData.utr, senderUpi: regData.senderUpi,
-      payeeUpi: regData.payeeUpi, referenceNumber, status: 'SUCCESS',
+      payeeUpi: regData.payeeUpi, referenceNumber: ref, status: 'SUCCESS',
     });
-
-    log(`${tag} ✅ SUCCESS — ${regData.fullName}`);
+    log(`${tag} ✅✅✅ DONE — ${regData.fullName}`);
+    removeOngoing(ongoingEntry);
+    await snap(page, `ok_${regIndex}`);
     return true;
   } catch (err) {
-    log(`${tag} ❌ FAILED — ${err.message}`);
+    log(`${tag} ❌❌❌ FAILED — ${err.message}`);
+    removeOngoing(ongoingEntry);
     await snap(page, `fail_${regIndex}`);
     appendRecord({
       eventName: eventName.trim(), fullName: regData.fullName, email: regData.email,
       phone: regData.phone, college: regData.college, branch: regData.branch,
       semester: regData.semester, utr: regData.utr, senderUpi: regData.senderUpi,
-      payeeUpi: regData.payeeUpi, referenceNumber: '', status: `FAILED: ${err.message.slice(0, 80)}`,
+      payeeUpi: regData.payeeUpi, referenceNumber: '', status: 'FAILURE',
     });
     return false;
   } finally {
@@ -341,148 +386,63 @@ async function runRegistration(browser, regIndex, totalCount, targetEventIndex =
   }
 }
 
-async function runPool(total, concurrency, taskFn) {
-  let nextIndex = 0;
-  let completed = 0;
+async function runPool(total, concurrency, fn) {
+  let idx = 0;
+  let done = 0;
+  let ok = 0;
+  const infinite = !isFinite(total);
 
-  async function worker() {
+  async function worker(wid) {
     while (true) {
-      const index = nextIndex++;
-      if (index >= total) return;
-
+      const i = idx++;
+      if (!infinite && i >= total) return;
+      const start = Date.now();
+      log(`[W${wid}] Task ${i + 1}${infinite ? '' : '/' + total}`);
       try {
-        await taskFn(index);
-      } catch (err) {
-        log(`[POOL] Worker error on task ${index}: ${err.message}`);
+        const r = await fn(i);
+        if (r) ok++;
+      } catch (e) {
+        log(`[W${wid}] ❌ ${e.message}`);
       }
-
-      completed++;
-      log(`[POOL] Progress: ${completed}/${total} completed`);
-
-      if (PROXY_MODE === 'tor') {
-        rotateWorkerIP(index);
-        await new Promise((r) => setTimeout(r, 1500));
-      }
+      done++;
+      log(`[W${wid}] ${done} done${infinite ? '' : '/' + total} (${ok} OK) — ${((Date.now() - start) / 1000).toFixed(1)}s`);
     }
   }
 
-  const workers = [];
-  const actualConcurrency = Math.min(concurrency, total);
-  for (let i = 0; i < actualConcurrency; i++) {
-    workers.push(worker());
-  }
-
-  await Promise.all(workers);
-}
-
-async function runEventRegistrations(browser, eventIndex, targetCount) {
-  let successful = 0;
-  while (successful < targetCount) {
-    const needed = targetCount - successful;
-    log(`[SCHEDULER] Event ${eventIndex + 1} needs ${needed} more successes to reach ${targetCount}`);
-    let currentBatchSuccess = 0;
-    await runPool(needed, PARALLEL, async (index) => {
-      const success = await runRegistration(browser, successful + index, targetCount, eventIndex);
-      if (success) {
-        currentBatchSuccess++;
-      }
-    });
-    successful += currentBatchSuccess;
-    if (successful < targetCount) {
-      log(`[SCHEDULER] Completed batch. Event ${eventIndex + 1} has ${successful}/${targetCount} successes.`);
-    }
-  }
-}
-
-async function startWorkerPool(totalWorkers, staggerIntervalMs) {
-  const workers = [];
-  for (let i = 0; i < totalWorkers; i++) {
-    console.log(`Initializing Worker ${i + 1}...`);
-    workers.push(runWorker(i));
-    if (i < totalWorkers - 1) {
-      await delay(staggerIntervalMs);
-    }
-  }
-  await Promise.all(workers);
-  console.log("All workers finished execution.");
-}
-
-async function runWorker(id) {
-  console.log(`Worker ${id + 1} started.`);
-  // Perform work...
+  const n = infinite ? concurrency : Math.min(concurrency, total);
+  log(`[POOL] ${n} workers for ${infinite ? 'INFINITE' : total} tasks`);
+  await Promise.all(Array.from({ length: n }, (_, i) => worker(i + 1)));
+  return ok;
 }
 
 (async () => {
-  log(`\n${'═'.repeat(60)}`);
-  log(`DATABASE CHOCKE ft. SNAKEKING — 5 Events | ${PARALLEL} parallel | Proxy: ${PROXY_MODE} | Headless: ${HEADLESS}`);
-  log(`${'═'.repeat(60)}`);
+  const args = process.argv.slice(2);
+  const INFINITE = args.includes('--infinite');
+  const countIdx = args.find(a => /^\d+$/.test(a));
+  const COUNT = INFINITE ? Infinity : (countIdx ? parseInt(countIdx) : fs.readFileSync(path.join(__dirname, 'NAMES.TXT'), 'utf-8').split('\n').filter(l => l.trim()).length);
+  const PARALLEL = parseInt(args.find(a => a.startsWith('--parallel') || a.startsWith('-p'))?.split('=')[1] || args[args.indexOf('--parallel') + 1] || args[args.indexOf('-p') + 1] || '5', 10);
+  const HEADLESS = args.includes('--headful') ? false : true;
+
+  log(`═`.repeat(50));
+  log(`ESTRALIS-BOT — ${INFINITE ? 'INFINITE' : COUNT} regs | ${PARALLEL} parallel | Headless: ${HEADLESS}`);
+  log(`═`.repeat(50));
 
   ensureCsvFile();
-
-  if (PROXY_MODE === 'tor') {
-    const workerCount = PARALLEL;
-    log(`[TOR] Spawning ${workerCount} isolated Tor instances...`);
-    const result = await spawnTorInstances(workerCount);
-    torInstances = result.instances;
-    torCleanup = result.cleanup;
-    log(`[TOR] ${torInstances.length} Tor instances ready`);
-  } else if (PROXY_MODE === 'file') {
-    proxyList = loadProxyList();
-  }
 
   const browser = await chromium.launch({
     headless: HEADLESS,
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
   });
 
-  const startTime = Date.now();
+  process.on('SIGINT', async () => { await browser.close(); process.exit(0); });
+  process.on('SIGTERM', async () => { await browser.close(); process.exit(0); });
 
-  const cleanup = async () => {
-    if (torCleanup) torCleanup();
-    await browser.close();
-  };
-  process.on('SIGINT', async () => { await cleanup(); process.exit(0); });
-  process.on('SIGTERM', async () => { await cleanup(); process.exit(0); });
+  const start = Date.now();
+  const succeeded = await runPool(COUNT, PARALLEL, (i) => runRegistration(browser, i, COUNT));
 
-  const FLAG_PATH = path.join(__dirname, 'logs', 'infinite_mode.flag');
-  if (IS_INFINITE) {
-    fs.writeFileSync(FLAG_PATH, 'true');
-  } else {
-    try { if (fs.existsSync(FLAG_PATH)) fs.unlinkSync(FLAG_PATH); } catch (e) {}
-  }
-
-  try {
-    const rounds = [600, 300];
-    let loopCount = 0;
-    while (true) {
-      loopCount++;
-      if (IS_INFINITE) {
-        log(`\n[SCHEDULER] ♾️ INFINITE LOOP RUNNING — BATCH ROUND ${loopCount}`);
-      }
-      for (let r = 0; r < (IS_INFINITE ? 1 : rounds.length); r++) {
-        const batchSize = IS_INFINITE ? 99999 : rounds[r];
-        log(`[SCHEDULER] Starting Round ${IS_INFINITE ? loopCount : r + 1} with ${batchSize} registrations per event`);
-
-        for (let eventIndex = 0; eventIndex < 5; eventIndex++) {
-          log(`[SCHEDULER] Event ${eventIndex + 1}/5 | Target batch: ${batchSize}`);
-          await runEventRegistrations(browser, eventIndex, batchSize);
-
-          if (eventIndex < 4 || r < rounds.length - 1 || IS_INFINITE) {
-            log(`[SCHEDULER] Waiting 30 seconds before starting the next set of events...`);
-            await new Promise((resolve) => setTimeout(resolve, 30 * 1000));
-          }
-        }
-      }
-      if (!IS_INFINITE) break;
-    }
-  } finally {
-    try { if (fs.existsSync(FLAG_PATH)) fs.unlinkSync(FLAG_PATH); } catch (e) {}
-    await cleanup();
-  }
-
-  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-  log(`\n${'═'.repeat(60)}`);
-  log(`DONE — All rounds completed in ${elapsed}s`);
-  log(`CSV: ${path.join(__dirname, 'output.csv')}`);
-  log(`${'═'.repeat(60)}`);
+  await browser.close();
+  const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+  log(`═`.repeat(50));
+  log(`DONE — ${succeeded} succeeded in ${elapsed}s${isFinite(COUNT) ? ' (' + COUNT + ' total)' : ''}`);
+  log(`═`.repeat(50));
 })();

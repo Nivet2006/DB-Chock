@@ -5,9 +5,8 @@ const { exec } = require('child_process');
 
 const PORT = parseInt(process.argv[2], 10) || 4000;
 const CSV_PATH = path.join(__dirname, '..', 'output.csv');
-const NAMES_PATH = path.join(__dirname, '..', 'NAMES.TXT');
 const LOG_DIR = path.join(__dirname, '..', 'logs');
-const FLAG_PATH = path.join(__dirname, '..', 'logs', 'infinite_mode.flag');
+const TARGET_PATH = path.join(__dirname, '..', 'logs', 'target.flag');
 
 function parseCSV() {
   if (!fs.existsSync(CSV_PATH)) return { headers: [], rows: [], raw: '' };
@@ -17,7 +16,7 @@ function parseCSV() {
   const headers = lines[0].split(',').map(h => h.replace(/"/g, '').trim());
   const rows = [];
   for (let i = 1; i < lines.length; i++) {
-    const vals = lines[i].match(/(".*?"|[^,]+)/g) || [];
+    const vals = lines[i].split(',');
     const row = {};
     headers.forEach((h, idx) => { row[h] = (vals[idx] || '').replace(/"/g, '').trim(); });
     rows.push(row);
@@ -26,9 +25,13 @@ function parseCSV() {
 }
 
 function getTotalTarget() {
-  if (fs.existsSync(FLAG_PATH)) return 999999; // Represents infinity in dashboard
-  if (!fs.existsSync(NAMES_PATH)) return 0;
-  return fs.readFileSync(NAMES_PATH, 'utf-8').split('\n').filter(l => l.trim()).length;
+  if (fs.existsSync(TARGET_PATH)) {
+    const val = fs.readFileSync(TARGET_PATH, 'utf-8').trim();
+    if (val === 'INF') return 999999;
+    const n = parseInt(val, 10);
+    if (!isNaN(n)) return n;
+  }
+  return 0;
 }
 
 function getLatestLog(lines = 50) {
@@ -43,9 +46,14 @@ function apiData() {
   const { rows } = parseCSV();
   const total = getTotalTarget();
   const success = rows.filter(r => r.Status === 'SUCCESS').length;
-  const failed = rows.filter(r => r.Status && r.Status.startsWith('FAILED')).length;
+  const failed = rows.filter(r => r.Status === 'FAILURE').length;
   const logTail = getLatestLog(50);
-  return JSON.stringify({ total, success, failed, completed: rows.length, rows, logTail });
+  let ongoing = [];
+  try {
+    const p = path.join(__dirname, '..', 'logs', 'ongoing.json');
+    if (fs.existsSync(p)) ongoing = JSON.parse(fs.readFileSync(p, 'utf-8') || '[]');
+  } catch {}
+  return JSON.stringify({ total, success, failed, completed: rows.length, rows, logTail, ongoing });
 }
 
 function buildDashboard() {
@@ -54,572 +62,383 @@ function buildDashboard() {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DATABASE CHOCKE ft. SNAKEKING — Console</title>
+<title>DATABASE CHOCKE ft. SNAKEKING</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
-    font-family: 'Inter', sans-serif;
-    background: #06060c;
-    color: #f3f4f6;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: #0d1117;
+    color: #e6edf3;
     min-height: 100vh;
-    overflow-x: hidden;
   }
   .header {
-    background: linear-gradient(135deg, #090915 0%, #150824 50%, #05101f 100%);
-    border-bottom: 1px solid rgba(139, 92, 246, 0.3);
-    padding: 20px 32px;
+    border-bottom: 1px solid #30363d;
+    padding: 16px 32px;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    position: sticky;
-    top: 0;
-    z-index: 100;
-    backdrop-filter: blur(12px);
-  }
-  .brand {
-    display: flex;
-    align-items: center;
-    gap: 12px;
+    background: #161b22;
   }
   .brand h1 {
-    font-size: 20px;
-    font-weight: 800;
-    background: linear-gradient(135deg, #c084fc, #6366f1, #38bdf8);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    letter-spacing: -0.5px;
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+    color: #e6edf3;
   }
-  .live-indicator {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    color: #4ade80;
-    background: rgba(74, 222, 128, 0.1);
-    padding: 6px 14px;
-    border-radius: 9999px;
-    border: 1px solid rgba(74, 222, 128, 0.2);
-  }
-  .live-dot {
-    width: 8px;
-    height: 8px;
-    background: #4ade80;
-    border-radius: 50%;
-    box-shadow: 0 0 12px #4ade80;
-    animation: pulse 1.5s infinite;
-  }
-  @keyframes pulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.4; transform: scale(0.85); }
+  .brand span {
+    font-size: 11px;
+    color: #8b949e;
+    font-weight: 500;
+    margin-left: 8px;
   }
   .kill-btn {
-    background: linear-gradient(135deg, #ef4444, #b91c1c);
-    color: white;
-    border: none;
-    padding: 10px 20px;
-    border-radius: 12px;
-    font-weight: 700;
-    font-size: 13px;
+    background: #21262d;
+    color: #f85149;
+    border: 1px solid #30363d;
+    padding: 8px 18px;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 12px;
     cursor: pointer;
-    box-shadow: 0 0 15px rgba(239, 68, 68, 0.4);
-    transition: all 0.3s ease;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
+    transition: all 0.15s;
+    font-family: inherit;
   }
   .kill-btn:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 0 25px rgba(239, 68, 68, 0.7);
-    background: linear-gradient(135deg, #f87171, #dc2626);
+    background: #f85149;
+    color: #fff;
+    border-color: #f85149;
   }
-  .container {
-    max-width: 1600px;
-    margin: 0 auto;
-    padding: 32px;
+  .container { max-width: 1400px; margin: 0 auto; padding: 24px 32px; }
+  .stats-row {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
   }
-  .stats-grid {
-    display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 20px;
-    margin-bottom: 32px;
+  .stat {
+    flex: 1;
+    min-width: 120px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    padding: 16px 20px;
   }
-  @media (max-width: 1200px) {
-    .stats-grid { grid-template-columns: repeat(3, 1fr); }
-  }
-  @media (max-width: 768px) {
-    .stats-grid { grid-template-columns: 1fr; }
-  }
-  .stat-card {
-    background: rgba(17, 17, 28, 0.7);
-    border: 1px solid rgba(139, 92, 246, 0.15);
-    border-radius: 20px;
-    padding: 24px;
-    position: relative;
-    overflow: hidden;
-    backdrop-filter: blur(8px);
-    transition: transform 0.3s ease, border-color 0.3s ease;
-  }
-  .stat-card:hover {
-    transform: translateY(-3px);
-    border-color: rgba(139, 92, 246, 0.3);
-  }
-  .stat-card::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 4px;
-  }
-  .stat-card.target::before { background: linear-gradient(90deg, #c084fc, #a855f7); }
-  .stat-card.success::before { background: linear-gradient(90deg, #4ade80, #22c55e); }
-  .stat-card.failed::before { background: linear-gradient(90deg, #f87171, #ef4444); }
-  .stat-card.completed::before { background: linear-gradient(90deg, #60a5fa, #3b82f6); }
-  .stat-card.remaining::before { background: linear-gradient(90deg, #fbbf24, #f59e0b); }
   .stat-label {
-    font-size: 11px;
+    font-size: 10px;
     text-transform: uppercase;
-    letter-spacing: 1.5px;
-    color: #9ca3af;
-    margin-bottom: 12px;
+    letter-spacing: 0.8px;
+    color: #8b949e;
     font-weight: 600;
+    margin-bottom: 4px;
   }
   .stat-val {
-    font-size: 40px;
-    font-weight: 800;
-    line-height: 1;
-    letter-spacing: -1px;
+    font-size: 28px;
+    font-weight: 700;
+    color: #e6edf3;
+    letter-spacing: -0.5px;
   }
-  .stat-card.target .stat-val { color: #c084fc; text-shadow: 0 0 15px rgba(192, 132, 252, 0.2); }
-  .stat-card.success .stat-val { color: #4ade80; text-shadow: 0 0 15px rgba(74, 222, 128, 0.2); }
-  .stat-card.failed .stat-val { color: #f87171; text-shadow: 0 0 15px rgba(248, 113, 113, 0.2); }
-  .stat-card.completed .stat-val { color: #60a5fa; text-shadow: 0 0 15px rgba(96, 165, 250, 0.2); }
-  .stat-card.remaining .stat-val { color: #fbbf24; text-shadow: 0 0 15px rgba(251, 191, 36, 0.2); }
+  .stat-val.green { color: #3fb950; }
+  .stat-val.red { color: #f85149; }
+  .stat-val.gray { color: #8b949e; }
   .progress-wrap {
-    background: rgba(17, 17, 28, 0.7);
-    border: 1px solid rgba(139, 92, 246, 0.15);
-    border-radius: 20px;
-    padding: 24px;
-    margin-bottom: 32px;
-    backdrop-filter: blur(8px);
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin-bottom: 24px;
   }
   .progress-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 12px;
+    margin-bottom: 8px;
   }
   .progress-title {
-    font-weight: 700;
-    font-size: 14px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #8b949e;
+    text-transform: uppercase;
     letter-spacing: 0.5px;
-    color: #e5e7eb;
   }
   .progress-pct {
-    font-weight: 800;
-    color: #c084fc;
-    font-size: 16px;
+    font-size: 13px;
+    font-weight: 700;
+    color: #e6edf3;
   }
   .progress-bar-bg {
     width: 100%;
-    height: 14px;
-    background: rgba(139, 92, 246, 0.08);
-    border-radius: 9999px;
+    height: 6px;
+    background: #21262d;
+    border-radius: 3px;
     overflow: hidden;
-    border: 1px solid rgba(139, 92, 246, 0.15);
   }
   .progress-bar-fill {
     height: 100%;
-    background: linear-gradient(90deg, #c084fc, #6366f1, #38bdf8, #4ade80);
-    border-radius: 9999px;
+    background: #e6edf3;
+    border-radius: 3px;
     width: 0%;
-    transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: 0 0 20px rgba(99, 102, 241, 0.5);
-  }
-  .visuals-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 24px;
-    margin-bottom: 32px;
-  }
-  @media (max-width: 1024px) {
-    .visuals-grid { grid-template-columns: 1fr; }
-  }
-  .chart-card {
-    background: rgba(17, 17, 28, 0.7);
-    border: 1px solid rgba(139, 92, 246, 0.15);
-    border-radius: 20px;
-    padding: 24px;
-    backdrop-filter: blur(8px);
-    min-height: 320px;
-    display: flex;
-    flex-direction: column;
-  }
-  .chart-card h3 {
-    font-size: 14px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: #9ca3af;
-    margin-bottom: 20px;
-    font-weight: 700;
-    border-left: 3px solid #c084fc;
-    padding-left: 10px;
-  }
-  .chart-container {
-    flex-grow: 1;
-    position: relative;
-    width: 100%;
-    height: 100%;
+    transition: width 0.4s ease;
   }
   .main-grid {
     display: grid;
-    grid-template-columns: 2fr 1fr;
-    gap: 24px;
-    margin-bottom: 32px;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin-bottom: 24px;
   }
-  @media (max-width: 1200px) {
+  @media (max-width: 900px) {
     .main-grid { grid-template-columns: 1fr; }
   }
-  .panel-card {
-    background: rgba(17, 17, 28, 0.7);
-    border: 1px solid rgba(139, 92, 246, 0.15);
-    border-radius: 20px;
-    padding: 24px;
-    backdrop-filter: blur(8px);
+  .card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    padding: 20px;
     display: flex;
     flex-direction: column;
   }
-  .panel-card h3 {
-    font-size: 14px;
+  .card h3 {
+    font-size: 11px;
     text-transform: uppercase;
-    letter-spacing: 1px;
-    color: #9ca3af;
-    margin-bottom: 20px;
-    font-weight: 700;
-    border-left: 3px solid #6366f1;
-    padding-left: 10px;
-  }
-  .control-row {
-    display: flex;
-    gap: 16px;
-    margin-bottom: 20px;
-    flex-wrap: wrap;
+    letter-spacing: 0.8px;
+    color: #8b949e;
+    font-weight: 600;
+    margin-bottom: 16px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #21262d;
   }
   .search-input {
-    flex-grow: 1;
-    background: rgba(6, 6, 12, 0.5);
-    border: 1px solid rgba(139, 92, 246, 0.2);
-    border-radius: 12px;
-    padding: 12px 18px;
-    color: white;
+    width: 100%;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 8px 12px;
     font-size: 13px;
-    transition: all 0.3s ease;
-  }
-  .search-input:focus {
+    font-family: inherit;
+    color: #e6edf3;
+    margin-bottom: 12px;
     outline: none;
-    border-color: #c084fc;
-    box-shadow: 0 0 15px rgba(192, 132, 252, 0.15);
+  }
+  .search-input:focus { border-color: #8b949e; }
+  .filter-row {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
   }
   .filter-btn {
-    background: rgba(139, 92, 246, 0.08);
-    border: 1px solid rgba(139, 92, 246, 0.2);
-    color: #d1d5db;
-    padding: 10px 20px;
-    border-radius: 12px;
-    font-weight: 600;
-    font-size: 13px;
+    background: #21262d;
+    border: 1px solid #30363d;
+    color: #8b949e;
+    padding: 5px 14px;
+    border-radius: 6px;
+    font-weight: 500;
+    font-size: 11px;
     cursor: pointer;
-    transition: all 0.3s ease;
+    transition: all 0.1s;
+    font-family: inherit;
   }
-  .filter-btn:hover {
-    background: rgba(139, 92, 246, 0.15);
-    border-color: rgba(139, 92, 246, 0.4);
-    color: white;
-  }
+  .filter-btn:hover { border-color: #8b949e; color: #e6edf3; }
   .filter-btn.active {
-    background: #6366f1;
-    border-color: #6366f1;
-    color: white;
-    box-shadow: 0 0 15px rgba(99, 102, 241, 0.3);
+    background: #e6edf3;
+    border-color: #e6edf3;
+    color: #0d1117;
   }
-  .table-container {
-    overflow-x: auto;
-    max-height: 600px;
-  }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 12px;
-  }
+  .table-wrap { overflow-x: auto; max-height: 500px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
   th {
     text-align: left;
-    padding: 14px 16px;
-    background: rgba(139, 92, 246, 0.05);
-    color: #c084fc;
-    font-weight: 700;
+    padding: 10px 12px;
+    color: #8b949e;
+    font-weight: 600;
+    font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    border-bottom: 2px solid rgba(139, 92, 246, 0.15);
+    border-bottom: 1px solid #30363d;
+    position: sticky;
+    top: 0;
+    background: #161b22;
   }
   td {
-    padding: 14px 16px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
-    color: #d1d5db;
-    max-width: 180px;
+    padding: 10px 12px;
+    border-bottom: 1px solid #21262d;
+    color: #e6edf3;
+    max-width: 140px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  tr {
-    transition: background 0.2s ease;
-  }
-  tr:hover td {
-    background: rgba(139, 92, 246, 0.04);
-  }
-  .status-badge {
+  tr:hover td { background: #1c2333; }
+  .badge {
     display: inline-block;
-    padding: 4px 12px;
-    border-radius: 9999px;
-    font-weight: 700;
+    padding: 2px 10px;
+    border-radius: 4px;
+    font-weight: 600;
     font-size: 10px;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.3px;
   }
-  .status-badge.success {
-    background: rgba(74, 222, 128, 0.1);
-    color: #4ade80;
-    border: 1px solid rgba(74, 222, 128, 0.2);
+  .badge.success { background: #1b3a1b; color: #3fb950; }
+  .badge.failure { background: #3a1b1b; color: #f85149; }
+  .badge.ongoing {
+    background: #3d2e00;
+    color: #d29922;
+    animation: blink 1s infinite;
   }
-  .status-badge.failed {
-    background: rgba(248, 113, 113, 0.1);
-    color: #f87171;
-    border: 1px solid rgba(248, 113, 113, 0.2);
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
   }
-  .log-viewer {
-    background: #040408;
-    border: 1px solid rgba(139, 92, 246, 0.2);
-    border-radius: 16px;
-    padding: 20px;
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-  }
-  .log-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 16px;
-  }
-  .log-header h3 {
-    font-size: 14px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: #9ca3af;
-    font-weight: 700;
-    border-left: 3px solid #38bdf8;
-    padding-left: 10px;
-  }
-  .log-search {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 8px;
-    padding: 6px 12px;
-    color: white;
-    font-size: 11px;
-    width: 150px;
+  @keyframes flashHighlight {
+    0% { background: rgba(63, 185, 80, 0.25); }
+    100% { background: transparent; }
   }
   .log-box {
     font-family: 'JetBrains Mono', monospace;
     font-size: 11px;
-    line-height: 1.6;
-    color: #a7f3d0;
-    background: rgba(0, 0, 0, 0.4);
-    border-radius: 12px;
-    padding: 16px;
+    line-height: 1.5;
+    color: #e6edf3;
+    background: #0d1117;
+    border: 1px solid #21262d;
+    border-radius: 6px;
+    padding: 12px;
     overflow-y: auto;
-    flex-grow: 1;
-    max-height: 520px;
+    flex: 1;
+    min-height: 400px;
+    max-height: 600px;
     white-space: pre-wrap;
     word-break: break-all;
-    border: 1px solid rgba(255, 255, 255, 0.03);
   }
+  .log-search {
+    width: 100%;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    color: #e6edf3;
+    margin-bottom: 12px;
+    outline: none;
+  }
+  .log-search:focus { border-color: #8b949e; }
   .footer {
     text-align: center;
-    padding: 40px 20px;
-    color: #4b5563;
-    font-size: 12px;
-    border-top: 1px solid rgba(255, 255, 255, 0.02);
-    margin-top: 40px;
-    letter-spacing: 0.5px;
+    padding: 24px;
+    color: #484f58;
+    font-size: 11px;
+    border-top: 1px solid #21262d;
+    margin-top: 24px;
+    letter-spacing: 0.3px;
   }
   .modal-overlay {
     position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(4, 4, 8, 0.85);
-    backdrop-filter: blur(16px);
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.8);
     display: none;
     justify-content: center;
     align-items: center;
     z-index: 1000;
-    opacity: 0;
-    transition: opacity 0.3s ease;
   }
-  .modal-overlay.active {
-    display: flex;
-    opacity: 1;
-  }
+  .modal-overlay.active { display: flex; }
   .modal {
-    background: linear-gradient(135deg, #0d0d1a 0%, #1c0a2a 100%);
-    border: 1px solid #ef4444;
-    border-radius: 24px;
-    padding: 40px;
-    max-width: 450px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 12px;
+    padding: 32px;
+    max-width: 380px;
     width: 90%;
-    box-shadow: 0 0 50px rgba(239, 68, 68, 0.25);
     text-align: center;
-    transform: scale(0.9);
-    transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
-  }
-  .modal-overlay.active .modal {
-    transform: scale(1);
-  }
-  .modal-icon {
-    width: 64px;
-    height: 64px;
-    background: rgba(239, 68, 68, 0.1);
-    color: #ef4444;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 32px;
-    margin: 0 auto 24px;
-    border: 1px solid rgba(239, 68, 68, 0.2);
-    animation: pulse-red 2s infinite;
-  }
-  @keyframes pulse-red {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
-    50% { box-shadow: 0 0 0 12px rgba(239, 68, 68, 0); }
   }
   .modal h2 {
-    font-size: 20px;
-    font-weight: 800;
-    color: #f3f4f6;
-    margin-bottom: 8px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
+    font-size: 16px;
+    font-weight: 700;
+    margin-bottom: 6px;
+    color: #e6edf3;
   }
   .modal p {
-    color: #9ca3af;
+    color: #8b949e;
     font-size: 13px;
-    margin-bottom: 24px;
-    line-height: 1.5;
+    margin-bottom: 20px;
+    line-height: 1.4;
   }
   .modal-input {
     width: 100%;
-    background: rgba(0, 0, 0, 0.3);
-    border: 1px solid rgba(23ef, 68, 68, 0.3);
-    border-radius: 12px;
-    padding: 14px 18px;
-    color: white;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 10px 14px;
     font-size: 14px;
     text-align: center;
     letter-spacing: 4px;
     margin-bottom: 16px;
     font-family: 'JetBrains Mono', monospace;
-  }
-  .modal-input:focus {
     outline: none;
-    border-color: #ef4444;
-    box-shadow: 0 0 15px rgba(239, 68, 68, 0.2);
+    color: #e6edf3;
   }
-  .modal-actions {
-    display: flex;
-    gap: 12px;
-  }
+  .modal-input:focus { border-color: #f85149; }
+  .modal-actions { display: flex; gap: 10px; }
   .modal-btn {
     flex: 1;
-    padding: 14px;
-    border-radius: 12px;
-    font-weight: 700;
-    font-size: 13px;
+    padding: 10px;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 12px;
     cursor: pointer;
-    transition: all 0.2s ease;
-    text-transform: uppercase;
+    transition: all 0.1s;
+    font-family: inherit;
   }
   .modal-btn.cancel {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: #d1d5db;
+    background: #21262d;
+    border: 1px solid #30363d;
+    color: #8b949e;
   }
-  .modal-btn.cancel:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: white;
-  }
+  .modal-btn.cancel:hover { background: #30363d; }
   .modal-btn.confirm {
-    background: #ef4444;
+    background: #f85149;
     border: none;
-    color: white;
-    box-shadow: 0 4px 14px rgba(239, 68, 68, 0.3);
+    color: #fff;
   }
-  .modal-btn.confirm:hover {
-    background: #dc2626;
-    box-shadow: 0 4px 20px rgba(239, 68, 68, 0.5);
-  }
-  .error-shake {
-    animation: shake 0.4s ease;
-  }
-  @keyframes shake {
-    0%, 100% { transform: translateX(0); }
-    20%, 60% { transform: translateX(-6px); }
-    40%, 80% { transform: translateX(6px); }
-  }
+  .modal-btn.confirm:hover { background: #da3633; }
 </style>
 </head>
 <body>
 <div class="header">
   <div class="brand">
-    <h1>⚡ DATABASE CHOCKE ft. SNAKEKING</h1>
-    <div class="live-indicator"><div class="live-dot"></div>LIVE MONITOR</div>
+    <h1>DATABASE CHOCKE ft. SNAKEKING</h1>
+    <span>LIVE</span>
   </div>
-  <button class="kill-btn" onclick="openKillModal()">⚠️ KILL SWITCH</button>
+  <button class="kill-btn" onclick="openKillModal()">KILL</button>
 </div>
 
 <div class="container">
-  <div class="stats-grid">
-    <div class="stat-card target">
-      <div class="stat-label">Target Total</div>
+  <div class="stats-row">
+    <div class="stat">
+      <div class="stat-label">Target</div>
       <div class="stat-val" id="stat-total">0</div>
     </div>
-    <div class="stat-card success">
-      <div class="stat-label">Successes</div>
-      <div class="stat-val" id="stat-success">0</div>
+    <div class="stat">
+      <div class="stat-label">Success</div>
+      <div class="stat-val green" id="stat-success">0</div>
     </div>
-    <div class="stat-card failed">
-      <div class="stat-label">Failures</div>
-      <div class="stat-val" id="stat-failed">0</div>
+    <div class="stat">
+      <div class="stat-label">Failed</div>
+      <div class="stat-val red" id="stat-failed">0</div>
     </div>
-    <div class="stat-card completed">
+    <div class="stat">
       <div class="stat-label">Completed</div>
       <div class="stat-val" id="stat-completed">0</div>
     </div>
-    <div class="stat-card remaining">
+    <div class="stat">
       <div class="stat-label">Remaining</div>
-      <div class="stat-val" id="stat-remaining">0</div>
+      <div class="stat-val gray" id="stat-remaining">0</div>
     </div>
   </div>
 
   <div class="progress-wrap">
     <div class="progress-header">
-      <span class="progress-title">Global Progress Tracker</span>
+      <span class="progress-title">Progress</span>
       <span class="progress-pct" id="progress-pct">0%</span>
     </div>
     <div class="progress-bar-bg">
@@ -627,46 +446,24 @@ function buildDashboard() {
     </div>
   </div>
 
-  <div class="visuals-grid">
-    <div class="chart-card">
-      <h3>Registration Performance</h3>
-      <div class="chart-container">
-        <canvas id="ratioChart"></canvas>
-      </div>
-    </div>
-    <div class="chart-card">
-      <h3>Event Distribution</h3>
-      <div class="chart-container">
-        <canvas id="eventChart"></canvas>
-      </div>
-    </div>
-    <div class="chart-card">
-      <h3>Academic College Split</h3>
-      <div class="chart-container">
-        <canvas id="collegeChart"></canvas>
-      </div>
-    </div>
-  </div>
-
   <div class="main-grid">
-    <div class="panel-card">
-      <h3>Active Records Log</h3>
-      <div class="control-row">
-        <input type="text" class="search-input" id="table-search" placeholder="Search by Name, Email, UTR, College or Status..." oninput="filterTable()">
+    <div class="card">
+      <h3>Records</h3>
+      <input type="text" class="search-input" id="table-search" placeholder="Search name, email, college, status..." oninput="filterTable()">
+      <div class="filter-row">
         <button class="filter-btn active" onclick="setFilter('ALL', this)">ALL</button>
         <button class="filter-btn" onclick="setFilter('SUCCESS', this)">SUCCESS</button>
-        <button class="filter-btn" onclick="setFilter('FAILED', this)">FAILED</button>
+        <button class="filter-btn" onclick="setFilter('FAILURE', this)">FAILURE</button>
+        <button class="filter-btn" onclick="setFilter('ONGOING', this)">ONGOING</button>
       </div>
-      <div class="table-container">
+      <div class="table-wrap">
         <table>
           <thead>
             <tr>
               <th>#</th>
-              <th>Time</th>
               <th>Name</th>
               <th>Email</th>
-              <th>UTR</th>
-              <th>College</th>
+              <th>Event</th>
               <th>Status</th>
             </tr>
           </thead>
@@ -675,290 +472,154 @@ function buildDashboard() {
       </div>
     </div>
 
-    <div class="log-viewer">
-      <div class="log-header">
-        <h3>Live System Output</h3>
-        <input type="text" class="log-search" id="log-search" placeholder="Filter console logs..." oninput="filterLogs()">
-      </div>
+    <div class="card">
+      <h3>Console</h3>
+      <input type="text" class="log-search" id="log-search" placeholder="Filter..." oninput="filterLogs()">
       <div class="log-box" id="log-box"></div>
     </div>
   </div>
 
-  <div class="footer">DATABASE CHOCKE CONSOLE SYSTEM • REAL-TIME INTERACTIVE PIPELINE</div>
+  <div class="footer">DATABASE CHOCKE CONSOLE</div>
 </div>
 
 <div class="modal-overlay" id="kill-modal">
-  <div class="modal" id="modal-box">
-    <div class="modal-icon">☣️</div>
-    <h2>SYSTEM SHUTDOWN DEMANDED</h2>
-    <p>This action will terminate all active playwright workers, abort existing registrations, close live connection streams, and completely kill this control panel server instantly.</p>
-    <input type="password" class="modal-input" id="kill-password" placeholder="••••" autofocus>
+  <div class="modal">
+    <h2>TERMINATE</h2>
+    <p>Kill all active bot workers and dashboard.</p>
+    <input type="password" class="modal-input" id="kill-password" placeholder="password" autofocus>
     <div class="modal-actions">
       <button class="modal-btn cancel" onclick="closeKillModal()">CANCEL</button>
-      <button class="modal-btn confirm" onclick="submitKill()">TERMINATE CORE</button>
+      <button class="modal-btn confirm" onclick="submitKill()">KILL</button>
     </div>
   </div>
 </div>
 
 <script>
-  let ratioChart, eventChart, collegeChart;
   let allRows = [];
+  let ongoingList = [];
   let statusFilter = 'ALL';
   let activeLogText = '';
 
-  function initCharts() {
-    const ctxRatio = document.getElementById('ratioChart').getContext('2d');
-    ratioChart = new Chart(ctxRatio, {
-      type: 'doughnut',
-      data: {
-        labels: ['Success', 'Failed'],
-        datasets: [{
-          data: [0, 0],
-          backgroundColor: ['#4ade80', '#f87171'],
-          borderWidth: 0,
-          hoverOffset: 4
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: {
-            position: 'bottom',
-            labels: { color: '#9ca3af', font: { family: 'Inter', size: 11 } }
-          }
-        }
-      }
-    });
-
-    const ctxEvent = document.getElementById('eventChart').getContext('2d');
-    eventChart = new Chart(ctxEvent, {
-      type: 'bar',
-      data: {
-        labels: [],
-        datasets: [{
-          label: 'Registrations',
-          data: [],
-          backgroundColor: '#6366f1',
-          borderRadius: 6,
-          borderWidth: 0
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        scales: {
-          x: { grid: { display: false }, ticks: { color: '#9ca3af', font: { size: 10 } } },
-          y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#9ca3af' } }
-        },
-        plugins: {
-          legend: { display: false }
-        }
-      }
-    });
-
-    const ctxCollege = document.getElementById('collegeChart').getContext('2d');
-    collegeChart = new Chart(ctxCollege, {
-      type: 'polarArea',
-      data: {
-        labels: [],
-        datasets: [{
-          data: [],
-          backgroundColor: [
-            'rgba(192, 132, 252, 0.6)',
-            'rgba(99, 102, 241, 0.6)',
-            'rgba(56, 189, 248, 0.6)',
-            'rgba(74, 222, 128, 0.6)',
-            'rgba(251, 191, 36, 0.6)'
-          ],
-          borderWidth: 0
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        scales: {
-          r: {
-            grid: { color: 'rgba(255,255,255,0.05)' },
-            angleLines: { color: 'rgba(255,255,255,0.05)' },
-            ticks: { display: false }
-          }
-        },
-        plugins: {
-          legend: {
-            position: 'bottom',
-            labels: { color: '#9ca3af', font: { family: 'Inter', size: 9 } }
-          }
-        }
-      }
-    });
-  }
-
-  async function updateDashboardData() {
+  async function update() {
     try {
       const res = await fetch('/api/data');
       const data = await res.json();
-      allRows = data.rows;
+      allRows = data.rows || [];
+      ongoingList = data.ongoing || [];
 
-      const isInfinite = data.total === 999999;
-      document.getElementById('stat-total').innerText = isInfinite ? '∞' : data.total;
+      const inf = data.total === 999999;
+      document.getElementById('stat-total').innerText = inf ? '∞' : data.total;
       document.getElementById('stat-success').innerText = data.success;
       document.getElementById('stat-failed').innerText = data.failed;
       document.getElementById('stat-completed').innerText = data.completed;
-      document.getElementById('stat-remaining').innerText = isInfinite ? '∞' : Math.max(0, data.total - data.completed);
+      document.getElementById('stat-remaining').innerText = inf ? '∞' : Math.max(0, data.total - data.completed);
 
-      const pct = data.total > 0 ? (isInfinite ? Math.round((data.completed % 100)) : Math.round((data.completed / data.total) * 100)) : 0;
-      document.getElementById('progress-pct').innerText = isInfinite ? (data.completed + ' registrations') : (pct + '% (' + data.completed + '/' + data.total + ')');
-      document.getElementById('progress-fill').style.width = isInfinite ? (pct + '%') : (Math.min(pct, 100) + '%');
-
-      ratioChart.data.datasets[0].data = [data.success, data.failed];
-      ratioChart.update();
-
-      const events = {};
-      const colleges = {};
-      data.rows.forEach(r => {
-        const ev = r['Event Name'] || 'Unknown';
-        events[ev] = (events[ev] || 0) + 1;
-        const col = r.College || 'Unknown';
-        colleges[col] = (colleges[col] || 0) + 1;
-      });
-
-      const sortedEvents = Object.entries(events).sort((a,b) => b[1]-a[1]).slice(0, 8);
-      eventChart.data.labels = sortedEvents.map(e => e[0].slice(0, 15));
-      eventChart.data.datasets[0].data = sortedEvents.map(e => e[1]);
-      eventChart.update();
-
-      const sortedColleges = Object.entries(colleges).sort((a,b) => b[1]-a[1]).slice(0, 5);
-      collegeChart.data.labels = sortedColleges.map(c => c[0].slice(0, 15));
-      collegeChart.data.datasets[0].data = sortedColleges.map(c => c[1]);
-      collegeChart.update();
+      const pct = data.total > 0 ? (inf ? 0 : Math.min(100, Math.round(data.completed / data.total * 100))) : 0;
+      document.getElementById('progress-pct').innerText = inf ? (data.completed + ' done') : (pct + '% (' + data.completed + '/' + data.total + ')');
+      document.getElementById('progress-fill').style.width = inf ? '0%' : pct + '%';
 
       filterTable();
-
-      activeLogText = data.logTail || 'No logs yet';
+      activeLogText = data.logTail || '';
       filterLogs();
-
-    } catch (err) {}
+    } catch(e) {}
   }
 
-  function setFilter(filter, el) {
-    statusFilter = filter;
-    document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active'));
+  function setFilter(f, el) {
+    statusFilter = f;
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
     el.classList.add('active');
     filterTable();
   }
 
+  let prevOngoingKeys = {};
+
   function filterTable() {
-    const searchVal = document.getElementById('table-search').value.toLowerCase();
-    const recordsBody = document.getElementById('records-body');
-    recordsBody.innerHTML = '';
+    const q = document.getElementById('table-search').value.toLowerCase();
+    const body = document.getElementById('records-body');
+    body.innerHTML = '';
 
-    const filtered = allRows.filter(r => {
-      const matchSearch = 
-        (r['Full Name'] || '').toLowerCase().includes(searchVal) ||
-        (r.Email || '').toLowerCase().includes(searchVal) ||
-        (r.UTR || '').toLowerCase().includes(searchVal) ||
-        (r.College || '').toLowerCase().includes(searchVal) ||
-        (r.Status || '').toLowerCase().includes(searchVal);
+    const currentKeys = {};
+    ongoingList.forEach(r => { currentKeys[(r.name + '|' + r.email).toLowerCase()] = 1; });
 
-      if (statusFilter === 'SUCCESS') return matchSearch && r.Status === 'SUCCESS';
-      if (statusFilter === 'FAILED') return matchSearch && r.Status && r.Status.startsWith('FAILED');
-      return matchSearch;
+    const combined = [];
+    allRows.forEach(r => {
+      const key = (r['Full Name'] + '|' + r.Email).toLowerCase();
+      const ts = r.Timestamp ? new Date(r.Timestamp).getTime() : 0;
+      combined.push({ _key: key, _sort: ts, _status: r.Status, _name: r['Full Name'] || '-', _email: r.Email || '-', _event: r['Event Name'] || '-', _isNew: !prevOngoingKeys[key] && prevOngoingKeys[key] !== undefined ? 1 : 0 });
+    });
+    ongoingList.forEach(r => {
+      const key = (r.name + '|' + r.email).toLowerCase();
+      const ts = r.startedAt ? new Date(r.startedAt).getTime() : Date.now();
+      combined.push({ _key: key, _sort: ts, _status: 'ONGOING', _name: r.name || '-', _email: r.email || '-', _event: r.event || '-', _isNew: 0 });
     });
 
-    const displayRows = filtered.slice(-100).reverse();
-    displayRows.forEach((r, i) => {
-      const rowIdx = filtered.length - i;
-      const time = r.Timestamp ? new Date(r.Timestamp).toLocaleTimeString('en-IN') : '-';
-      const badgeClass = r.Status === 'SUCCESS' ? 'success' : 'failed';
+    combined.sort((a, b) => b._sort - a._sort);
+
+    const filtered = combined.filter(r => {
+      const s = (r._name + ' ' + r._email + ' ' + r._status).toLowerCase();
+      if (!s.includes(q)) return false;
+      if (statusFilter === 'SUCCESS') return r._status === 'SUCCESS';
+      if (statusFilter === 'FAILURE') return r._status === 'FAILURE';
+      if (statusFilter === 'ONGOING') return r._status === 'ONGOING';
+      return true;
+    });
+
+    prevOngoingKeys = currentKeys;
+
+    filtered.slice(0, 100).forEach((r, i) => {
+      const cls = r._status === 'SUCCESS' ? 'success' : r._status === 'FAILURE' ? 'failure' : 'ongoing';
       const tr = document.createElement('tr');
-      tr.innerHTML = \`
-        <td>\${rowIdx}</td>
-        <td>\${time}</td>
-        <td>\${r['Full Name'] || '-'}</td>
-        <td>\${r.Email || '-'}</td>
-        <td>\${r.UTR || '-'}</td>
-        <td title="\${r.College || ''}">\${(r.College || '-').slice(0, 20)}</td>
-        <td><span class="status-badge \${badgeClass}">\${r.Status || '-'}</span></td>
-      \`;
-      recordsBody.appendChild(tr);
+      if (r._isNew) tr.style.animation = 'flashHighlight 1s ease';
+      tr.innerHTML = '<td>' + (i + 1) + '</td>' +
+        '<td>' + r._name + '</td>' +
+        '<td>' + r._email + '</td>' +
+        '<td>' + r._event.slice(0, 25) + '</td>' +
+        '<td><span class="badge ' + cls + '">' + r._status + '</span></td>';
+      body.appendChild(tr);
     });
-
-    if (displayRows.length === 0) {
-      recordsBody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#4b5563;padding:40px">No matching records found</td></tr>';
+    if (!filtered.length) {
+      body.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#484f58;padding:32px;font-size:13px">No records</td></tr>';
     }
   }
 
   function filterLogs() {
-    const query = document.getElementById('log-search').value.toLowerCase();
-    const logBox = document.getElementById('log-box');
-    const lines = activeLogText.split('\\n');
-    const filteredLines = lines.filter(l => l.toLowerCase().includes(query));
-    logBox.innerHTML = filteredLines.join('\\n').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    logBox.scrollTop = logBox.scrollHeight;
+    const q = document.getElementById('log-search').value.toLowerCase();
+    const box = document.getElementById('log-box');
+    const lines = activeLogText.split('\\n').filter(l => l.toLowerCase().includes(q));
+    box.textContent = lines.join('\\n');
+    box.scrollTop = box.scrollHeight;
   }
 
   function openKillModal() {
-    const modal = document.getElementById('kill-modal');
-    modal.style.display = 'flex';
-    setTimeout(() => {
-      modal.classList.add('active');
-      document.getElementById('kill-password').focus();
-    }, 10);
+    document.getElementById('kill-modal').classList.add('active');
+    document.getElementById('kill-password').focus();
   }
 
   function closeKillModal() {
-    const modal = document.getElementById('kill-modal');
-    modal.classList.remove('active');
-    setTimeout(() => { modal.style.display = 'none'; }, 300);
+    document.getElementById('kill-modal').classList.remove('active');
     document.getElementById('kill-password').value = '';
   }
 
   async function submitKill() {
-    const pwdInput = document.getElementById('kill-password');
-    const modalBox = document.getElementById('modal-box');
-    const password = pwdInput.value;
-
-    if (!password) {
-      shakeModal();
-      return;
-    }
-
+    const pwd = document.getElementById('kill-password').value;
+    if (!pwd) return;
     try {
       const res = await fetch('/api/kill', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password })
+        body: JSON.stringify({ password: pwd })
       });
-
       if (res.ok) {
-        modalBox.innerHTML = \`
-          <div class="modal-icon" style="color:#10b981;background:rgba(16,185,129,0.1);border-color:rgba(16,185,129,0.2)">☠️</div>
-          <h2 style="color:#10b981">EXECUTION IN PROGRESS</h2>
-          <p style="color:#d1d5db;margin-bottom:0">All connection sockets, active playwright windows, proxy nodes, and background bot workers have been forcefully terminated. This control panel will now shut down.</p>
-        \`;
-        setTimeout(() => { window.close(); }, 4000);
+        document.querySelector('.modal').innerHTML = '<h2 style="color:#090">TERMINATED</h2><p>All processes killed.</p>';
+        setTimeout(() => window.close(), 2000);
       } else {
-        shakeModal();
+        document.getElementById('kill-password').value = '';
+        document.getElementById('kill-password').focus();
       }
-    } catch (err) {
-      shakeModal();
-    }
+    } catch(e) {}
   }
 
-  function shakeModal() {
-    const modalBox = document.getElementById('modal-box');
-    modalBox.classList.add('error-shake');
-    setTimeout(() => { modalBox.classList.remove('error-shake'); }, 400);
-    document.getElementById('kill-password').value = '';
-    document.getElementById('kill-password').focus();
-  }
-
-  window.onload = () => {
-    initCharts();
-    updateDashboardData();
-    setInterval(updateDashboardData, 2000);
-  };
+  window.onload = () => { update(); setInterval(update, 2000); };
 </script>
 </body>
 </html>`;
@@ -967,27 +628,23 @@ function buildDashboard() {
 const server = http.createServer((req, res) => {
   if (req.method === 'POST' && req.url === '/api/kill') {
     let body = '';
-    req.on('data', chunk => { body += chunk; });
+    req.on('data', c => { body += c; });
     req.on('end', () => {
       try {
         const data = JSON.parse(body);
         if (data.password === 'Gcem') {
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ success: true }));
-          const isWin = process.platform === 'win32';
-          const killCmd = isWin
-            ? 'powershell -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like \'*index.js*\' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"'
-            : 'pkill -f "node.*index.js"';
-          exec(killCmd, () => {
+          exec('pkill -f "cloudflared" 2>/dev/null; pkill -f "estralis-bot/index.js" 2>/dev/null', () => {
             process.exit(0);
           });
         } else {
           res.writeHead(401, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Incorrect password' }));
+          res.end(JSON.stringify({ error: 'Wrong password' }));
         }
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Invalid request' }));
+        res.end(JSON.stringify({ error: 'Invalid' }));
       }
     });
   } else if (req.url === '/api/data') {
@@ -1000,7 +657,5 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n╔═══════════════════════════════════════════════════╗`);
-  console.log(`║  Dashboard running at http://localhost:${PORT}      ║`);
-  console.log(`╚═══════════════════════════════════════════════════╝`);
+  console.log(`\n  Dashboard: http://localhost:${PORT}`);
 });

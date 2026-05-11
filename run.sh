@@ -7,6 +7,11 @@ cd "$SCRIPT_DIR"
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
+BOT="node $SCRIPT_DIR/index.js"
+CSV="$SCRIPT_DIR/output.csv"
+DASHBOARD="node $SCRIPT_DIR/dashboard/server.js"
+TARGET_FLAG="$SCRIPT_DIR/logs/target.flag"
+
 print_banner() {
   echo -e "${CYAN}"
   echo "  ╔═════════════════════════════════════════════════╗"
@@ -20,285 +25,242 @@ log_step() { echo -e "\n${GREEN}[✓]${NC} ${BOLD}$1${NC}"; }
 log_warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 log_err()  { echo -e "${RED}[✗]${NC} $1"; }
 
-needs_setup() {
-  if ! command -v node &>/dev/null; then return 0; fi
-  if [ ! -d "$SCRIPT_DIR/node_modules" ]; then return 0; fi
-  return 1
+get_stats() {
+  if [ ! -f "$CSV" ]; then echo "0 0 0"; return; fi
+  local total=$(tail -n +2 "$CSV" | grep -c . 2>/dev/null || echo 0)
+  local success=$(grep -c ',SUCCESS' "$CSV" 2>/dev/null || echo 0)
+  local failed=$(grep -c ',FAILURE' "$CSV" 2>/dev/null || echo 0)
+  echo "$total $success $failed"
 }
 
-install_node() {
-  if command -v node &>/dev/null; then
-    log_step "Node.js: $(node -v)"; return
-  fi
-  log_step "Installing Node.js v20..."
-  sudo apt update -y && sudo apt install -y curl unzip
-  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-  sudo apt install -y nodejs
-  log_step "Node.js installed: $(node -v)"
+show_stats() {
+  local s=($(get_stats))
+  [ -z "${s[0]}" ] && s[0]=0; [ -z "${s[1]}" ] && s[1]=0; [ -z "${s[2]}" ] && s[2]=0
+  echo ""
+  echo -e "  ${BOLD}STATS${NC}  ${GREEN}OK:${NC} ${s[1]} ${BOLD}||${NC} ${RED}FAIL:${NC} ${s[2]} ${BOLD}||${NC} ${YELLOW}TOTAL:${NC} ${s[0]} ${BOLD}||${NC} ${BOLD}RATE:${NC} $((s[0] > 0 ? s[1] * 100 / s[0] : 0))%"
+  echo ""
 }
 
-install_system_deps() {
-  log_step "Installing system dependencies..."
-  local asound_pkg="libasound2"
-  if apt-cache show libasound2t64 &>/dev/null; then
-    asound_pkg="libasound2t64"
-  fi
-  sudo apt install -y \
-    build-essential libcairo2-dev libjpeg-dev libpango1.0-dev \
-    libgif-dev librsvg2-dev libpixman-1-dev libnss3 libatk1.0-0 \
-    libatk-bridge2.0-0 libx11-xcb1 libxcb1 libxcomposite1 libxdamage1 \
-    libxrandr2 libgbm1 "$asound_pkg" libpangocairo-1.0-0 libgtk-3-0 \
-    libxshmfence1 libdrm2 libxfixes3 libcups2 libxtst6 fonts-liberation
+count_names() { wc -l < "$SCRIPT_DIR/NAMES.TXT" 2>/dev/null || echo 100; }
+
+kill_all() {
+  pkill -f "cloudflared" 2>/dev/null; wait 2>/dev/null
+  pkill -f "estralis-bot/index.js" 2>/dev/null; wait 2>/dev/null
+  pkill -f "dashboard/server.js" 2>/dev/null; wait 2>/dev/null
+  pkill -f "tor --SocksPort" 2>/dev/null; wait 2>/dev/null
+  log_step "All processes stopped"
 }
 
-install_tor() {
-  log_step "Installing & configuring Tor..."
-  sudo apt install -y tor
-
-  sudo sed -i 's/#ControlPort 9051/ControlPort 9051/' /etc/tor/torrc 2>/dev/null || true
-  sudo sed -i 's/#CookieAuthentication 1/CookieAuthentication 0/' /etc/tor/torrc 2>/dev/null || true
-
-  if ! grep -q "HashedControlPassword" /etc/tor/torrc; then
-    echo 'HashedControlPassword ""' | sudo tee -a /etc/tor/torrc >/dev/null 2>&1 || true
-  fi
-  sudo systemctl enable tor 2>/dev/null || true
-  sudo systemctl restart tor 2>/dev/null || sudo service tor restart 2>/dev/null || true
-  sleep 2
-  if systemctl is-active --quiet tor 2>/dev/null; then
-    log_step "Tor is running on SOCKS5 port 9050"
-  else
-    log_warn "Tor may not be running — start manually: sudo tor &"
-  fi
+reset_csv() {
+  echo -e "\n  ${YELLOW}clearing previous cache data...${NC}"
+  echo '"Timestamp","Event Name","Full Name","Email","Phone","College","Branch","Semester","UTR","Sender UPI","Payee UPI","Registration Reference Number","Status"' > "$CSV"
+  rm -f "$SCRIPT_DIR/screenshots/"*.png "$SCRIPT_DIR/generated_receipts/"*.jpg "$SCRIPT_DIR/logs/"*.log 2>/dev/null || true
+  log_step "Cache cleared — fresh start"
 }
 
-install_npm_deps() {
-  log_step "Installing npm packages..."
+set_target() {
+  local val="$1"
+  echo "$val" > "$TARGET_FLAG"
+}
+
+install_deps() {
+  log_step "Installing/checking npm packages..."
   cd "$SCRIPT_DIR" && npm install
-}
-
-install_playwright() {
-  log_step "Installing Playwright Chromium..."
-  npx playwright install chromium
-  sudo npx playwright install-deps chromium 2>/dev/null || true
-}
-
-create_dirs() {
+  if ! npx playwright install chromium 2>/dev/null; then npx playwright install chromium; fi
+  if ! command -v cloudflared &>/dev/null; then
+    log_step "Installing cloudflared..."
+    curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -o /tmp/cloudflared.deb
+    sudo dpkg -i /tmp/cloudflared.deb 2>/dev/null || sudo apt install -f -y
+    rm -f /tmp/cloudflared.deb
+  fi
   mkdir -p "$SCRIPT_DIR"/{uploads,logs,generated_receipts,screenshots,logos}
+  log_step "Ready"
 }
 
-install_cloudflared() {
-  if command -v cloudflared &>/dev/null; then
-    log_step "cloudflared already installed"; return
+setup_tor() {
+  if ! command -v tor &>/dev/null; then
+    log_step "Installing Tor..."
+    sudo apt install -y tor 2>/dev/null
   fi
-  log_step "Installing cloudflared (Cloudflare Tunnel)..."
-  curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -o /tmp/cloudflared.deb
-  sudo dpkg -i /tmp/cloudflared.deb 2>/dev/null || sudo apt install -f -y
-  rm -f /tmp/cloudflared.deb
-  log_step "cloudflared installed"
+  log_step "Tor is available"
 }
 
-run_setup() {
-  log_step "Running full setup..."
-  install_node
-  install_system_deps
-  install_tor
-  install_cloudflared
-  install_npm_deps
-  install_playwright
-  create_dirs
-  log_step "Setup complete!"
-}
-
-
-
-check_tor() {
-  if systemctl is-active --quiet tor 2>/dev/null || pgrep -x tor >/dev/null 2>&1 || tasklist.exe 2>/dev/null | grep -i "tor.exe" >/dev/null 2>&1 || curl -s --socks5 127.0.0.1:9050 https://check.torproject.org/ &>/dev/null; then
-    echo -e "  Tor: ${GREEN}RUNNING${NC}"
-  else
-    if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OSTYPE" == "win32" ]]; then
-      echo -e "  Tor: ${RED}STOPPED${NC} — start Tor or run 'tor' in terminal"
-    else
-      echo -e "  Tor: ${RED}STOPPED${NC} — start with: sudo systemctl start tor"
-    fi
-  fi
-}
-
-show_menu() {
-  echo -e "${BOLD}─── RUN OPTIONS ─── (${YELLOW}all names in NAMES.TXT${NC}${BOLD}) ──${NC}"
-  echo -e "  ${CYAN}1)${NC}  Run ALL names + Tor (parallel)     ${GREEN}(RECOMMENDED)${NC}"
-  echo -e "  ${CYAN}14)${NC} Run INFINITE Loop + Tor (faker names) ${MAGENTA}(INFINITY ♾️)${NC}"
-  echo -e "  ${CYAN}2)${NC}  Run custom count (parallel, no proxy)"
-  echo -e "  ${CYAN}3)${NC}  Run with proxy list (proxies.txt)"
-  echo -e "  ${CYAN}4)${NC}  Run sequential (single thread)"
-  echo -e "  ${CYAN}5)${NC}  Run in background (VPS/nohup)"
-  echo ""
-  echo -e "${BOLD}─── DASHBOARD ──────────────────────────────────────${NC}"
-  echo -e "  ${CYAN}6)${NC}  Launch Dashboard (local)"
-  echo -e "  ${CYAN}7)${NC}  Launch Dashboard + Cloudflare Tunnel ${GREEN}(PUBLIC URL)${NC}"
-  echo -e "  ${CYAN}8)${NC}  Run Bot + Dashboard + Tunnel (all-in-one)"
-  echo ""
-  echo -e "${BOLD}─── SETUP & TOOLS ──────────────────────────────────${NC}"
-  echo -e "  ${CYAN}9)${NC}  Full setup (Node + Tor + Tunnel)"
-  echo -e "  ${CYAN}10)${NC} Start / restart Tor"
-  echo -e "  ${CYAN}11)${NC} Check Tor IP"
-  echo -e "  ${CYAN}12)${NC} View live logs"
-  echo -e "  ${CYAN}13)${NC} Stop all bots + dashboard"
-  echo -e "  ${CYAN}0)${NC}  Exit"
-  echo ""
-  check_tor
-  echo ""
-  echo -n "Choice: "
+tor_instance() {
+  local port=$1
+  local data_dir="/tmp/tor_$port"
+  mkdir -p "$data_dir"
+  tor --SocksPort "$port" --DataDirectory "$data_dir" --RunAsDaemon 1 2>/dev/null
 }
 
 print_banner
-create_dirs
 
-if needs_setup; then
-  log_warn "First run — starting setup..."
-  run_setup
-fi
+if [ ! -d "$SCRIPT_DIR/node_modules" ]; then install_deps; fi
+
+TOTAL_NAMES=$(count_names)
 
 while true; do
-  show_menu
+  show_stats
+  echo -e "${BOLD}─── RUN ─────────────────────────────────────${NC}"
+  printf "  ${CYAN}%-8s${NC} %s\n" "1 2 3" "Quick parallel runs"
+  printf "  ${CYAN}%-8s${NC} %s\n" "5 10 20" "Quick parallel runs"
+  printf "  ${CYAN}%-8s${NC} %s\n" "C" "Custom count + parallel"
+  printf "  ${CYAN}%-8s${NC} %s\n" "A" "Run ALL ($TOTAL_NAMES)"
+  printf "  ${CYAN}%-8s${NC} %s\n" "I" "Infinite loop (Faker)"
+  echo ""
+  echo -e "${BOLD}─── DASHBOARD & TUNNEL ──────────────────────${NC}"
+  printf "  ${CYAN}%-8s${NC} %s\n" "D" "Dashboard"
+  printf "  ${CYAN}%-8s${NC} %s\n" "T" "Dashboard + Cloudflare Tunnel"
+  printf "  ${CYAN}%-8s${NC} %s\n" "B" "Bot + Dashboard + Tunnel (opens browser)"
+  printf "  ${CYAN}%-8s${NC} %s ${YELLOW}(no browser)${NC}\n" "H" "Headless Bot + Dashboard + Tunnel"
+  printf "  ${CYAN}%-8s${NC} %s\n" "ZZ" "Headless + Dashboard + Tunnel + Tor"
+  echo ""
+  echo -e "${BOLD}─── CONTROLS ────────────────────────────────${NC}"
+  printf "  ${CYAN}%-8s${NC} %s\n" "K" "Kill all processes"
+  printf "  ${CYAN}%-8s${NC} %s\n" "R" "Reset CSV, logs, screenshots"
+  printf "  ${CYAN}%-8s${NC} %s\n" "S" "Setup / Install dependencies"
+  printf "  ${CYAN}%-8s${NC} %s\n" "L" "View live logs"
+  printf "  ${CYAN}%-8s${NC} %s\n" "0" "Exit"
+  echo ""
+  echo -e "  ${YELLOW}Kill password: Gcem${NC}"
+  echo ""
+  echo -n "Choice: "
   read -r choice
 
   case $choice in
-    1)
-      echo -n "Parallel workers? [10]: "; read -r workers
-      workers=${workers:-10}
-      if ! pgrep -x tor >/dev/null 2>&1 && ! tasklist.exe 2>/dev/null | grep -i "tor.exe" >/dev/null 2>&1; then
-        log_warn "Starting Tor..."
-        if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OSTYPE" == "win32" ]]; then
-          start tor 2>/dev/null || tor &
-        else
-          sudo systemctl start tor 2>/dev/null || sudo tor &
-        fi
-        sleep 3
-      fi
-      log_step "Running ALL names in NAMES.TXT, $workers parallel, Tor IP rotation..."
-      node "$SCRIPT_DIR/index.js" --parallel "$workers" --proxy tor
+    1|2|3|5|10|20)
+      reset_csv
+      set_target "$choice"
+      echo -n "Parallel workers? [${choice}]: "; read -r workers
+      workers=${workers:-$choice}
+      log_step "$choice registrations, $workers parallel"
+      $BOT $choice --parallel "$workers"
       ;;
-    2)
-      echo -n "How many registrations? [50]: "; read -r count
-      count=${count:-50}
-      echo -n "Parallel workers? [10]: "; read -r workers
-      workers=${workers:-10}
-      node "$SCRIPT_DIR/index.js" "$count" --parallel "$workers"
+    C|c)
+      reset_csv
+      echo -n "How many? [10]: "; read -r count
+      count=${count:-10}
+      set_target "$count"
+      echo -n "Parallel workers? [5]: "; read -r workers
+      workers=${workers:-5}
+      log_step "$count registrations, $workers parallel"
+      $BOT $count --parallel "$workers"
       ;;
-    3)
-      if [ ! -f "$SCRIPT_DIR/proxies.txt" ]; then
-        log_err "proxies.txt not found!"; continue
-      fi
-      echo -n "Parallel workers? [10]: "; read -r workers
-      workers=${workers:-10}
-      node "$SCRIPT_DIR/index.js" --parallel "$workers" --proxy file
+    A|a)
+      reset_csv
+      set_target "$TOTAL_NAMES"
+      echo -n "Parallel workers? [5]: "; read -r workers
+      workers=${workers:-5}
+      log_step "ALL $TOTAL_NAMES names, $workers parallel"
+      $BOT --parallel "$workers"
       ;;
-    4)
-      echo -n "How many? [5]: "; read -r count
-      count=${count:-5}
-      node "$SCRIPT_DIR/index.js" "$count" --proxy tor
+    I|i)
+      reset_csv
+      set_target "INF"
+      echo -n "Parallel workers? [5]: "; read -r workers
+      workers=${workers:-5}
+      log_step "INFINITE loop, $workers parallel"
+      $BOT --parallel "$workers" --infinite
       ;;
-    5)
-      echo -n "Parallel workers? [10]: "; read -r workers
-      workers=${workers:-10}
-      LOGFILE="$SCRIPT_DIR/logs/bg_$(date +%s).log"
-      nohup node "$SCRIPT_DIR/index.js" --parallel "$workers" --proxy tor > "$LOGFILE" 2>&1 &
-      log_step "Background PID: $! — Log: $LOGFILE"
-      ;;
-    6)
-      log_step "Starting Dashboard on http://localhost:4000 ..."
-      node "$SCRIPT_DIR/dashboard/server.js" &
+    D|d)
+      log_step "Dashboard: http://localhost:4000"
+      $DASHBOARD &
       DASH_PID=$!
-      log_step "Dashboard running (PID: $DASH_PID)"
-      echo -e "  Open: ${CYAN}http://localhost:4000${NC}"
-      echo -e "  Press Enter to stop dashboard..."
-      read -r
+      echo "Press Enter to stop..."; read -r
       kill $DASH_PID 2>/dev/null
       ;;
-    7)
-      log_step "Starting Dashboard + Cloudflare Tunnel..."
-      node "$SCRIPT_DIR/dashboard/server.js" &
+    T|t)
+      log_step "Dashboard + Cloudflare Tunnel"
+      $DASHBOARD &
       DASH_PID=$!
       sleep 1
-      log_step "Dashboard running. Starting Cloudflare Tunnel..."
-      echo -e "  ${YELLOW}Look for the public URL below (*.trycloudflare.com)${NC}"
-      echo ""
-      cloudflared tunnel --url http://localhost:4000 &
+      echo -e "  ${YELLOW}Public URL at *.trycloudflare.com${NC}"
+      cloudflared tunnel --url http://localhost:4000 2>/dev/null &
       CF_PID=$!
-      echo ""
-      echo -e "  Press Enter to stop dashboard + tunnel..."
-      read -r
-      kill $DASH_PID $CF_PID 2>/dev/null
+      echo "Press Enter to stop..."; read -r
+      kill $DASH_PID $CF_PID 2>/dev/null; wait $CF_PID 2>/dev/null
       ;;
-    8)
-      log_step "Starting Bot + Dashboard + Tunnel (all-in-one)..."
-
-      node "$SCRIPT_DIR/dashboard/server.js" &
+    B|b)
+      reset_csv
+      echo -n "How many? [$TOTAL_NAMES]: "; read -r count
+      count=${count:-$TOTAL_NAMES}
+      set_target "$count"
+      echo -n "Parallel workers? [5]: "; read -r workers
+      workers=${workers:-5}
+      echo -n "Infinite? (y/n) [n]: "; read -r inf
+      extra=""; [[ "$inf" == "y" || "$inf" == "Y" ]] && extra="--infinite" && set_target "INF"
+      log_step "Starting Dashboard + Tunnel + Bot (visible)..."
+      $DASHBOARD &
       DASH_PID=$!
       sleep 1
-
-      cloudflared tunnel --url http://localhost:4000 &
+      cloudflared tunnel --url http://localhost:4000 2>/dev/null &
       CF_PID=$!
-      sleep 3
-      echo ""
+      sleep 2
+      $BOT $count --parallel "$workers" --headful $extra
+      kill $DASH_PID $CF_PID 2>/dev/null; wait $CF_PID 2>/dev/null
+      log_step "Done"
+      ;;
+    H|h)
+      reset_csv
+      echo -n "How many? [$TOTAL_NAMES]: "; read -r count
+      count=${count:-$TOTAL_NAMES}
+      set_target "$count"
       echo -n "Parallel workers? [10]: "; read -r workers
       workers=${workers:-10}
-
-      echo -n "Run infinitely (Faker names)? (y/n) [n]: "; read -r inf_choice
-      extra_args=""
-      if [[ "$inf_choice" == "y" || "$inf_choice" == "Y" ]]; then
-        extra_args="--infinite"
-      fi
-
-      log_step "Bot starting... Dashboard is live. Watch the tunnel URL above."
-      node "$SCRIPT_DIR/index.js" --parallel "$workers" --proxy tor $extra_args
-
-      kill $DASH_PID $CF_PID 2>/dev/null
-      log_step "Bot finished. Dashboard + Tunnel stopped."
+      echo -n "Infinite? (y/n) [n]: "; read -r inf
+      extra=""; [[ "$inf" == "y" || "$inf" == "Y" ]] && extra="--infinite" && set_target "INF"
+      log_step "Starting HEADLESS Bot + Dashboard + Tunnel..."
+      $DASHBOARD &
+      DASH_PID=$!
+      sleep 1
+      cloudflared tunnel --url http://localhost:4000 2>/dev/null &
+      CF_PID=$!
+      sleep 2
+      echo -e "  ${CYAN}Dashboard:${NC} http://localhost:4000"
+      echo -e "  ${YELLOW}Public URL in cloudflared output above${NC}"
+      $BOT $count --parallel "$workers" $extra
+      kill $DASH_PID $CF_PID 2>/dev/null; wait $CF_PID 2>/dev/null
+      log_step "Done"
       ;;
-    9) run_setup ;;
-    10)
-      log_step "Restarting Tor..."
-      if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OSTYPE" == "win32" ]]; then
-        taskkill.exe /f /im tor.exe 2>/dev/null || true
-        start tor 2>/dev/null || tor &
-      else
-        sudo systemctl restart tor 2>/dev/null || sudo service tor restart 2>/dev/null || (sudo killall tor 2>/dev/null; sudo tor &)
-      fi
-      sleep 2; check_tor
+    ZZ|zz)
+      setup_tor
+      reset_csv
+      echo -n "How many? [$TOTAL_NAMES]: "; read -r count
+      count=${count:-$TOTAL_NAMES}
+      set_target "$count"
+      echo -n "Parallel workers? [10]: "; read -r workers
+      workers=${workers:-10}
+      echo -n "Infinite? (y/n) [n]: "; read -r inf
+      extra=""; [[ "$inf" == "y" || "$inf" == "Y" ]] && extra="--infinite" && set_target "INF"
+      TOR_BASE=9050
+      TOR_PORTS=""
+      TOR_COUNT=$(( workers > 5 ? 5 : workers ))
+      for i in $(seq 0 $((TOR_COUNT - 1))); do
+        p=$((TOR_BASE + i))
+        tor_instance "$p"
+        TOR_PORTS="${TOR_PORTS}${p},"
+      done
+      TOR_PORTS="${TOR_PORTS%,}"
+      log_step "$TOR_COUNT Tor instances on ports $TOR_PORTS (sharing among $workers workers)"
+      log_step "Starting HEADLESS Bot + Dashboard + Tunnel + Tor..."
+      $DASHBOARD &
+      DASH_PID=$!
+      sleep 1
+      cloudflared tunnel --url http://localhost:4000 2>/dev/null &
+      CF_PID=$!
+      sleep 2
+      echo -e "  ${CYAN}Dashboard:${NC} http://localhost:4000"
+      echo -e "  ${YELLOW}Public URL in cloudflared output above${NC}"
+      $BOT $count --parallel "$workers" $extra --tor-ports="$TOR_PORTS"
+      kill $DASH_PID $CF_PID 2>/dev/null; wait $CF_PID 2>/dev/null
+      log_step "Done"
       ;;
-    11)
-      log_step "Checking Tor exit IP..."
-      REAL_IP=$(curl -s ifconfig.me 2>/dev/null || echo "unknown")
-      TOR_IP=$(curl -s --socks5 127.0.0.1:9050 ifconfig.me 2>/dev/null || echo "Tor not running")
-      echo -e "  Real IP: ${RED}$REAL_IP${NC}"
-      echo -e "  Tor IP:  ${GREEN}$TOR_IP${NC}"
-      ;;
-    12)
+    K|k) kill_all ;;
+    R|r) reset_csv ;;
+    S|s) install_deps ;;
+    L|l)
       LATEST=$(ls -t "$SCRIPT_DIR/logs/"*.log 2>/dev/null | head -1)
       if [ -n "$LATEST" ]; then tail -f "$LATEST"
-      else log_warn "No logs found"; fi
-      ;;
-    13)
-      pkill -f "node.*index.js" 2>/dev/null || true
-      pkill -f "node.*server.js" 2>/dev/null || true
-      pkill -f cloudflared 2>/dev/null || true
-      log_step "All processes stopped"
-      ;;
-    14)
-      echo -n "Parallel workers? [10]: "; read -r workers
-      workers=${workers:-10}
-      if ! pgrep -x tor >/dev/null 2>&1 && ! tasklist.exe 2>/dev/null | grep -i "tor.exe" >/dev/null 2>&1; then
-        log_warn "Starting Tor..."
-        if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OSTYPE" == "win32" ]]; then
-          start tor 2>/dev/null || tor &
-        else
-          sudo systemctl start tor 2>/dev/null || sudo tor &
-        fi
-        sleep 3
-      fi
-      log_step "Running INFINITE Loop, $workers parallel, Tor IP rotation (Faker names)..."
-      node "$SCRIPT_DIR/index.js" --parallel "$workers" --proxy tor --infinite
+      else log_warn "No logs"; fi
       ;;
     0) echo -e "${GREEN}Bye!${NC}"; exit 0 ;;
     *) log_err "Invalid choice" ;;
