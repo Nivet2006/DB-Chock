@@ -245,7 +245,7 @@ while true; do
       workers=${workers:-10}
 
       echo -n "Run infinitely (Faker names)? (y/n) [n]: "; read -r inf_choice
-      local extra_args=""
+      extra_args=""
       if [[ "$inf_choice" == "y" || "$inf_choice" == "Y" ]]; then
         extra_args="--infinite"
       fi
