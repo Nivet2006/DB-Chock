@@ -183,6 +183,11 @@ async function runRegistration(browser, regIndex, totalCount, targetEventIndex =
     await page.waitForTimeout(100);
 
     const accessBtns = page.locator('text="Access Protocol"');
+    try {
+      await accessBtns.first().waitFor({ state: 'visible', timeout: 15000 });
+    } catch (e) {
+      throw new Error('Timeout waiting for Access Protocol buttons to load (slow Tor network)');
+    }
     const btnCount = await accessBtns.count();
     if (btnCount === 0) throw new Error('No Access Protocol buttons');
     const btnIdx = targetEventIndex !== null ? (targetEventIndex % btnCount) : randomInt(0, Math.min(btnCount - 1, 5));
