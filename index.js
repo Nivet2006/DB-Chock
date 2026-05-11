@@ -86,9 +86,7 @@ async function snap(page, name) {
   const file = path.join(__dirname, 'screenshots', `${name}_${Date.now()}.png`);
   try { await page.screenshot({ path: file, fullPage: false }); } catch {}
   return file;
-}
-
-async function scrollModalToBottom(page) {
+}async function scrollModalToBottom(page) {
   await page.evaluate(() => {
     const allEls = document.querySelectorAll('*');
     for (const el of allEls) {
@@ -101,29 +99,23 @@ async function scrollModalToBottom(page) {
       }
     }
   });
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(10);
 }
 
 async function scrollModalGradually(page) {
-  await page.evaluate(async () => {
+  await page.evaluate(() => {
     const allEls = document.querySelectorAll('*');
-    let target = null;
     for (const el of allEls) {
       const style = window.getComputedStyle(el);
       if (
         (style.overflowY === 'auto' || style.overflowY === 'scroll') &&
         el.scrollHeight > el.clientHeight + 50
-      ) { target = el; }
+      ) {
+        el.scrollTop = el.scrollHeight;
+      }
     }
-    if (!target) return;
-    const step = 250;
-    while (target.scrollTop + target.clientHeight < target.scrollHeight - 10) {
-      target.scrollTop += step;
-      await new Promise((r) => setTimeout(r, 80));
-    }
-    target.scrollTop = target.scrollHeight;
   });
-  await page.waitForTimeout(400);
+  await page.waitForTimeout(10);
 }
 
 async function clickByText(page, text) {
@@ -154,16 +146,11 @@ async function clickByText(page, text) {
 
 async function fillByPlaceholder(page, placeholder, value) {
   const input = page.locator(`input[placeholder*="${placeholder}" i], textarea[placeholder*="${placeholder}" i]`).first();
-  await input.waitFor({ state: 'visible', timeout: 10000 });
-  await input.click();
-  await page.waitForTimeout(randomInt(80, 200));
-  await input.fill('');
-  for (const ch of value) {
-    await input.type(ch, { delay: randomInt(20, 60) });
-  }
+  await input.waitFor({ state: 'visible', timeout: 5000 });
+  await input.fill(value);
 }
 
-async function runRegistration(browser, regIndex, totalCount) {
+async function runRegistration(browser, regIndex, totalCount, targetEventIndex = null) {
   const regData = generateRegistrationData();
   let eventName = 'Unknown Event';
 
@@ -184,50 +171,50 @@ async function runRegistration(browser, regIndex, totalCount) {
   try {
     log(`${tag} ▶ Starting — ${regData.fullName} | ${regData.email}${proxy ? ' | Proxy: ' + proxy.server : ''}`);
 
-    await page.goto(BASE_URL, { waitUntil: 'networkidle', timeout: 60000 });
-    await humanDelay(page, 800, 1500);
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await humanDelay(page, 100, 300);
 
     await clickByText(page, 'Events');
-    await humanDelay(page, 800, 1500);
-    await page.waitForTimeout(1000);
+    await humanDelay(page, 100, 300);
+    await page.waitForTimeout(200);
 
-    await page.evaluate(() => window.scrollBy(0, 600));
-    await page.waitForTimeout(800);
+    await page.evaluate(() => window.scrollBy(0, 500));
+    await page.waitForTimeout(100);
 
     const accessBtns = page.locator('text="Access Protocol"');
     const btnCount = await accessBtns.count();
     if (btnCount === 0) throw new Error('No Access Protocol buttons');
-    const btnIdx = randomInt(0, Math.min(btnCount - 1, 5));
+    const btnIdx = targetEventIndex !== null ? (targetEventIndex % btnCount) : randomInt(0, Math.min(btnCount - 1, 5));
 
     try {
       const card = accessBtns.nth(btnIdx).locator('xpath=ancestor::div[contains(@class,"card") or contains(@class,"event")]');
-      eventName = await card.locator('h2, h3, [class*="title"]').first().textContent({ timeout: 2000 });
+      eventName = await card.locator('h2, h3, [class*="title"]').first().textContent({ timeout: 1500 });
     } catch { eventName = `Event ${btnIdx + 1}`; }
 
     await accessBtns.nth(btnIdx).scrollIntoViewIfNeeded();
-    await humanDelay(page, 400, 800);
+    await humanDelay(page, 50, 150);
     await accessBtns.nth(btnIdx).click();
-    await humanDelay(page, 800, 1500);
+    await humanDelay(page, 150, 350);
 
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(200);
     await scrollModalGradually(page);
-    await humanDelay(page, 300, 600);
+    await humanDelay(page, 50, 150);
     try { await clickByText(page, 'Read Protocol'); } catch {
       await page.evaluate(() => {
         const b = [...document.querySelectorAll('button,a,div')].find((e) => e.textContent.toLowerCase().includes('read protocol'));
         if (b) b.click();
       });
     }
-    await humanDelay(page, 800, 1500);
+    await humanDelay(page, 150, 350);
 
     await scrollModalGradually(page);
     await scrollModalToBottom(page);
-    await humanDelay(page, 500, 1000);
+    await humanDelay(page, 100, 300);
 
     let confirmed = false;
     for (let attempt = 0; attempt < 5 && !confirmed; attempt++) {
       await scrollModalToBottom(page);
-      await page.waitForTimeout(500);
+      await page.waitForTimeout(150);
       confirmed = await page.evaluate(() => {
         const b = [...document.querySelectorAll('button,a,div,span')].find(
           (e) => e.textContent.trim().toUpperCase().includes('CONFIRM REGISTRY') && e.offsetParent !== null
@@ -238,38 +225,38 @@ async function runRegistration(browser, regIndex, totalCount) {
       if (!confirmed) {
         try {
           const btn = page.locator('text=/confirm registry/i').first();
-          await btn.scrollIntoViewIfNeeded({ timeout: 2000 });
-          await btn.click({ timeout: 4000 });
+          await btn.scrollIntoViewIfNeeded({ timeout: 1000 });
+          await btn.click({ timeout: 2000 });
           confirmed = true;
-        } catch { await page.waitForTimeout(800); }
+        } catch { await page.waitForTimeout(200); }
       }
     }
     if (!confirmed) throw new Error('Could not click Confirm Registry');
-    await humanDelay(page, 800, 1500);
+    await humanDelay(page, 150, 350);
 
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(400);
     await fillByPlaceholder(page, 'Name', regData.fullName);
-    await humanDelay(page, 200, 500);
+    await humanDelay(page, 50, 150);
     await fillByPlaceholder(page, 'email', regData.email);
-    await humanDelay(page, 200, 500);
+    await humanDelay(page, 50, 150);
     await fillByPlaceholder(page, 'Phone', regData.phone);
-    await humanDelay(page, 200, 500);
+    await humanDelay(page, 50, 150);
     await fillByPlaceholder(page, 'College', regData.college);
-    await humanDelay(page, 200, 500);
+    await humanDelay(page, 50, 150);
     await fillByPlaceholder(page, 'Sem', regData.semester);
-    await humanDelay(page, 200, 500);
+    await humanDelay(page, 50, 150);
     await fillByPlaceholder(page, 'CSE', regData.branch);
-    await humanDelay(page, 200, 500);
+    await humanDelay(page, 50, 150);
 
     await scrollModalToBottom(page);
-    await page.waitForTimeout(400);
+    await page.waitForTimeout(200);
     try { await clickByText(page, 'CONTINUE TO PAYMENT'); } catch {
       await page.evaluate(() => {
         const b = [...document.querySelectorAll('button,a,div')].find((e) => e.textContent.toUpperCase().includes('CONTINUE TO PAYMENT'));
         if (b) b.click();
       });
     }
-    await humanDelay(page, 1500, 2500);
+    await humanDelay(page, 400, 800);
 
     let scrapedAmount = '₹299';
     try {
@@ -295,14 +282,14 @@ async function runRegistration(browser, regIndex, totalCount) {
       phone: regData.phone,
     });
 
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(400);
     const fileInput = page.locator('input[type="file"]').first();
-    await fileInput.waitFor({ state: 'attached', timeout: 10000 });
+    await fileInput.waitFor({ state: 'attached', timeout: 5000 });
     await fileInput.setInputFiles(receiptPath);
-    await humanDelay(page, 800, 1500);
+    await humanDelay(page, 100, 300);
 
     await fillByPlaceholder(page, 'UTR', regData.utr);
-    await humanDelay(page, 300, 600);
+    await humanDelay(page, 50, 150);
 
     try { await clickByText(page, 'COMPLETE REGISTRY'); } catch {
       await page.evaluate(() => {
@@ -310,7 +297,7 @@ async function runRegistration(browser, regIndex, totalCount) {
         if (b) b.click();
       });
     }
-    await page.waitForTimeout(3000);
+    await page.waitForTimeout(1200);
 
     await snap(page, `ok_${regIndex}`);
 
@@ -329,6 +316,7 @@ async function runRegistration(browser, regIndex, totalCount) {
     });
 
     log(`${tag} ✅ SUCCESS — ${regData.fullName}`);
+    return true;
   } catch (err) {
     log(`${tag} ❌ FAILED — ${err.message}`);
     await snap(page, `fail_${regIndex}`);
@@ -338,6 +326,7 @@ async function runRegistration(browser, regIndex, totalCount) {
       semester: regData.semester, utr: regData.utr, senderUpi: regData.senderUpi,
       payeeUpi: regData.payeeUpi, referenceNumber: '', status: `FAILED: ${err.message.slice(0, 80)}`,
     });
+    return false;
   } finally {
     await context.close();
   }
@@ -377,20 +366,39 @@ async function runPool(total, concurrency, taskFn) {
   await Promise.all(workers);
 }
 
+async function runEventRegistrations(browser, eventIndex, targetCount) {
+  let successful = 0;
+  while (successful < targetCount) {
+    const needed = targetCount - successful;
+    log(`[SCHEDULER] Event ${eventIndex + 1} needs ${needed} more successes to reach ${targetCount}`);
+    let currentBatchSuccess = 0;
+    await runPool(needed, PARALLEL, async (index) => {
+      const success = await runRegistration(browser, successful + index, targetCount, eventIndex);
+      if (success) {
+        currentBatchSuccess++;
+      }
+    });
+    successful += currentBatchSuccess;
+    if (successful < targetCount) {
+      log(`[SCHEDULER] Completed batch. Event ${eventIndex + 1} has ${successful}/${targetCount} successes.`);
+    }
+  }
+}
+
 (async () => {
   log(`\n${'═'.repeat(60)}`);
-  log(`ESTRALIS BOT — ${COUNT} registrations | ${PARALLEL} parallel | Proxy: ${PROXY_MODE} | Headless: ${HEADLESS}`);
+  log(`DATABASE CHOCKE ft. SNAKEKING — 5 Events | ${PARALLEL} parallel | Proxy: ${PROXY_MODE} | Headless: ${HEADLESS}`);
   log(`${'═'.repeat(60)}`);
 
   ensureCsvFile();
 
   if (PROXY_MODE === 'tor') {
-    const workerCount = Math.min(PARALLEL, COUNT);
-    log(`[TOR] Spawning ${workerCount} isolated Tor instances (1 per worker = 1 unique IP each)...`);
+    const workerCount = PARALLEL;
+    log(`[TOR] Spawning ${workerCount} isolated Tor instances...`);
     const result = await spawnTorInstances(workerCount);
     torInstances = result.instances;
     torCleanup = result.cleanup;
-    log(`[TOR] ${torInstances.length} Tor instances ready — each worker has a DIFFERENT IP`);
+    log(`[TOR] ${torInstances.length} Tor instances ready`);
   } else if (PROXY_MODE === 'file') {
     proxyList = loadProxyList();
   }
@@ -410,18 +418,18 @@ async function runPool(total, concurrency, taskFn) {
   process.on('SIGTERM', async () => { await cleanup(); process.exit(0); });
 
   try {
-    if (PARALLEL > 1) {
-      log(`[POOL] Starting worker pool: ${PARALLEL} workers for ${COUNT} tasks`);
-      await runPool(COUNT, PARALLEL, async (index) => {
-        await new Promise((r) => setTimeout(r, randomInt(200, 1500)));
-        await runRegistration(browser, index, COUNT);
-      });
-    } else {
-      for (let i = 0; i < COUNT; i++) {
-        await runRegistration(browser, i, COUNT);
-        if (i < COUNT - 1) {
-          if (PROXY_MODE === 'tor') { rotateWorkerIP(i); await new Promise((r) => setTimeout(r, 2000)); }
-          else { await new Promise((r) => setTimeout(r, randomInt(2000, 4000))); }
+    const rounds = [600, 300];
+    for (let r = 0; r < rounds.length; r++) {
+      const batchSize = rounds[r];
+      log(`[SCHEDULER] Starting Round ${r + 1} with ${batchSize} registrations per event`);
+
+      for (let eventIndex = 0; eventIndex < 5; eventIndex++) {
+        log(`[SCHEDULER] Event ${eventIndex + 1}/5 | Target batch: ${batchSize}`);
+        await runEventRegistrations(browser, eventIndex, batchSize);
+
+        if (eventIndex < 4 || r < rounds.length - 1) {
+          log(`[SCHEDULER] Waiting 2 minutes before starting the next set of events...`);
+          await new Promise((resolve) => setTimeout(resolve, 2 * 60 * 1000));
         }
       }
     }
@@ -431,7 +439,7 @@ async function runPool(total, concurrency, taskFn) {
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
   log(`\n${'═'.repeat(60)}`);
-  log(`DONE — ${COUNT} registrations in ${elapsed}s`);
+  log(`DONE — All rounds completed in ${elapsed}s`);
   log(`CSV: ${path.join(__dirname, 'output.csv')}`);
   log(`${'═'.repeat(60)}`);
 })();

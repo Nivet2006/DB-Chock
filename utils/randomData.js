@@ -187,17 +187,10 @@ function generateRegistrationData() {
   };
 }
 
-async function humanDelay(page, minMs = 300, maxMs = 1200) {
-  const delay = randomInt(minMs, maxMs);
-  await page.waitForTimeout(delay);
-}
+async function humanDelay(page, minMs = 0, maxMs = 0) {}
 
 async function humanType(page, selector, text) {
-  await page.click(selector);
-  await page.waitForTimeout(randomInt(100, 300));
-  for (const char of text) {
-    await page.type(selector, char, { delay: randomInt(30, 120) });
-  }
+  await page.fill(selector, text);
 }
 
 module.exports = {

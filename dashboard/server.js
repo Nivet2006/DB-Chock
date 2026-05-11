@@ -1,11 +1,3 @@
-/**
- * dashboard/server.js — Live monitoring dashboard
- * Reads output.csv in real-time and serves a beautiful dashboard
- * 
- * Usage: node dashboard/server.js [port]
- * Then expose via: cloudflared tunnel --url http://localhost:4000
- */
-
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
