@@ -39,11 +39,15 @@ install_node() {
 
 install_system_deps() {
   log_step "Installing system dependencies..."
+  local asound_pkg="libasound2"
+  if ! apt-cache show libasound2 &>/dev/null; then
+    asound_pkg="libasound2t64"
+  fi
   sudo apt install -y \
     build-essential libcairo2-dev libjpeg-dev libpango1.0-dev \
     libgif-dev librsvg2-dev libpixman-1-dev libnss3 libatk1.0-0 \
     libatk-bridge2.0-0 libx11-xcb1 libxcb1 libxcomposite1 libxdamage1 \
-    libxrandr2 libgbm1 libasound2 libpangocairo-1.0-0 libgtk-3-0 \
+    libxrandr2 libgbm1 "$asound_pkg" libpangocairo-1.0-0 libgtk-3-0 \
     libxshmfence1 libdrm2 libxfixes3 libcups2 libxtst6 fonts-liberation
 }
 
