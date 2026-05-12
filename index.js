@@ -2,7 +2,7 @@ const { chromium } = require('@playwright/test');
 const path = require('path');
 const fs = require('fs');
 
-const { generateRegistrationData, humanDelay, randomInt } = require('./utils/randomData');
+const { generateRegistrationData, humanDelay, randomInt, loadDedup, saveDedup } = require('./utils/randomData');
 const { generatePaymentReceipt } = require('./utils/paymentGenerator');
 const { appendRecord, ensureCsvFile } = require('./utils/csv');
 
@@ -12,8 +12,11 @@ const TOR_ARG = process.argv.find(a => a.startsWith('--tor-ports'));
 const TOR_PORTS = TOR_ARG ? TOR_ARG.split('=')[1]?.split(',').map(Number).filter(Boolean) : (process.argv.includes('--tor') ? [9050] : []);
 const args = process.argv.slice(2);
 const LIST_EVENTS = args.includes('--list-events');
+const RESUME = args.includes('--resume');
 const EVENT_IDX_ARG = args.find(a => a.startsWith('--event-idx'));
 const EVENT_IDX = EVENT_IDX_ARG ? parseInt(EVENT_IDX_ARG.split('=')[1] || args[args.indexOf('--event-idx') + 1], 10) : null;
+const MIN_DELAY = parseInt(args.find(a => a.startsWith('--min-delay'))?.split('=')[1] || '80', 10);
+const MAX_DELAY = parseInt(args.find(a => a.startsWith('--max-delay'))?.split('=')[1] || '200', 10);
 const DIRS = ['uploads', 'logs', 'generated_receipts', 'screenshots'];
 for (const d of DIRS) {
   const p = path.join(__dirname, d);
@@ -22,6 +25,17 @@ for (const d of DIRS) {
 
 const LOG_FILE = path.join(__dirname, 'logs', `run_${Date.now()}.log`);
 const ONGOING_FILE = path.join(__dirname, 'logs', 'ongoing.json');
+const CHECKPOINT_FILE = path.join(__dirname, 'logs', 'checkpoint.json');
+
+function saveCheckpoint(state) {
+  try { fs.writeFileSync(CHECKPOINT_FILE, JSON.stringify(state), 'utf-8'); } catch {}
+}
+function loadCheckpoint() {
+  try { return JSON.parse(fs.readFileSync(CHECKPOINT_FILE, 'utf-8')); } catch { return null; }
+}
+function clearCheckpoint() {
+  try { fs.writeFileSync(CHECKPOINT_FILE, JSON.stringify({ done: 0, total: 0, ok: 0 }), 'utf-8'); } catch {}
+}
 
 function writeOngoing(entries) {
   try { fs.writeFileSync(ONGOING_FILE, JSON.stringify(entries), 'utf-8'); } catch {}
@@ -51,7 +65,7 @@ async function fillField(page, placeholder, value, label) {
   const input = page.locator(`input[placeholder*="${placeholder}" i], textarea[placeholder*="${placeholder}" i]`).first();
   await input.waitFor({ state: 'visible', timeout: 8000 });
   await input.fill(value);
-  await page.waitForTimeout(randomInt(80, 200));
+  await page.waitForTimeout(randomInt(MIN_DELAY, MAX_DELAY));
 }
 
 function pickRandom(arr) {
@@ -406,6 +420,18 @@ async function runPool(total, concurrency, fn) {
   let ok = 0;
   const infinite = !isFinite(total);
 
+  if (RESUME) {
+    const cp = loadCheckpoint();
+    if (cp && cp.total === total && cp.done > 0) {
+      idx = cp.done;
+      done = cp.done;
+      ok = cp.ok;
+      log(`[CHECKPOINT] Resuming from ${done}/${total} (${ok} OK)`);
+    } else if (cp) {
+      log(`[CHECKPOINT] Checkpoint total (${cp.total}) != requested (${total}) — starting fresh`);
+    }
+  }
+
   async function worker(wid) {
     while (true) {
       const i = idx++;
@@ -419,6 +445,9 @@ async function runPool(total, concurrency, fn) {
         log(`[W${wid}] ❌ ${e.message}`);
       }
       done++;
+      if (!infinite && done % 3 === 0) {
+        saveCheckpoint({ done, total, ok });
+      }
       log(`[W${wid}] ${done} done${infinite ? '' : '/' + total} (${ok} OK) — ${((Date.now() - start) / 1000).toFixed(1)}s`);
     }
   }
@@ -426,6 +455,7 @@ async function runPool(total, concurrency, fn) {
   const n = infinite ? concurrency : Math.min(concurrency, total);
   log(`[POOL] ${n} workers for ${infinite ? 'INFINITE' : total} tasks`);
   await Promise.all(Array.from({ length: n }, (_, i) => worker(i + 1)));
+  if (!infinite) clearCheckpoint();
   return ok;
 }
 
@@ -464,23 +494,30 @@ async function runPool(total, concurrency, fn) {
   const HEADLESS = args.includes('--headful') ? false : true;
 
   log(`═`.repeat(50));
-  log(`ESTRALIS-BOT — ${INFINITE ? 'INFINITE' : COUNT} regs | ${PARALLEL} parallel | Headless: ${HEADLESS}${EVENT_IDX !== null ? ' | Event:' + EVENT_IDX : ''}`);
+  log(`ESTRALIS-BOT — ${INFINITE ? 'INFINITE' : COUNT} regs | ${PARALLEL} parallel | Headless: ${HEADLESS}${EVENT_IDX !== null ? ' | Event:' + EVENT_IDX : ''}${RESUME ? ' | RESUME' : ''} | Delay: ${MIN_DELAY}-${MAX_DELAY}ms`);
   log(`═`.repeat(50));
 
   ensureCsvFile();
+  loadDedup();
 
   const browser = await chromium.launch({
     headless: HEADLESS,
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
   });
 
-  process.on('SIGINT', async () => { await browser.close(); process.exit(0); });
-  process.on('SIGTERM', async () => { await browser.close(); process.exit(0); });
+  const saveOnExit = async () => {
+    await browser.close();
+    saveDedup();
+    process.exit(0);
+  };
+  process.on('SIGINT', saveOnExit);
+  process.on('SIGTERM', saveOnExit);
 
   const start = Date.now();
   const succeeded = await runPool(COUNT, PARALLEL, (i) => runRegistration(browser, i, COUNT));
 
   await browser.close();
+  saveDedup();
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);
   log(`═`.repeat(50));
   log(`DONE — ${succeeded} succeeded in ${elapsed}s${isFinite(COUNT) ? ' (' + COUNT + ' total)' : ''}`);

@@ -50,6 +50,18 @@ show_stats() {
 
 count_names() { wc -l < "$SCRIPT_DIR/NAMES.TXT" 2>/dev/null || echo 100; }
 
+check_resume() {
+  local cp="$SCRIPT_DIR/logs/checkpoint.json"
+  if [ -f "$cp" ]; then
+    local done=$(grep -oP '"done":\s*\K\d+' "$cp" 2>/dev/null || echo 0)
+    local total=$(grep -oP '"total":\s*\K\d+' "$cp" 2>/dev/null || echo 0)
+    if [ "$done" -gt 0 ] && [ "$total" -gt 0 ]; then
+      echo -n "Checkpoint found ($done/$total done). Resume? (y/N): "; read -r ans
+      [[ "$ans" == "y" || "$ans" == "Y" ]] && echo "--resume" || echo ""
+    fi
+  fi
+}
+
 run_bot() {
   $BOT "$@"
   local rc=$?
@@ -200,23 +212,25 @@ while true; do
   read -r choice || { echo ""; exit 0; }
 
   case $choice in
-    1|2|3|5|10|20)
-      reset_csv
+     1|2|3|5|10|20)
       set_target "$choice"
       echo -n "Parallel workers? [${choice}]: "; read -r workers
       workers=${workers:-$choice}
+      echo -n "Delay speed (fast/medium/slow) [medium]: "; read -r speed
+      delay_opts=""; [[ "$speed" == "fast" ]] && delay_opts="--min-delay=20 --max-delay=80"; [[ "$speed" == "slow" ]] && delay_opts="--min-delay=200 --max-delay=500"
       log_step "$choice registrations, $workers parallel"
-      run_bot $choice --parallel "$workers"
+      run_bot $choice --parallel "$workers" $delay_opts $(check_resume)
       ;;
     C|c)
-      reset_csv
       echo -n "How many? [10]: "; read -r count
       count=${count:-10}
       set_target "$count"
       echo -n "Parallel workers? [5]: "; read -r workers
       workers=${workers:-5}
+      echo -n "Delay speed (fast/medium/slow) [medium]: "; read -r speed
+      delay_opts=""; [[ "$speed" == "fast" ]] && delay_opts="--min-delay=20 --max-delay=80"; [[ "$speed" == "slow" ]] && delay_opts="--min-delay=200 --max-delay=500"
       log_step "$count registrations, $workers parallel"
-      run_bot $count --parallel "$workers"
+      run_bot $count --parallel "$workers" $delay_opts $(check_resume)
       ;;
     E|e)
       log_step "Fetching event list from estralisfest..."
@@ -232,30 +246,33 @@ while true; do
         log_err "Invalid event number — max is $LAST_LINE"
         continue
       fi
-      reset_csv
       echo -n "How many? [10]: "; read -r count
       count=${count:-10}
       set_target "$count"
       echo -n "Parallel workers? [5]: "; read -r workers
       workers=${workers:-5}
+      echo -n "Delay speed (fast/medium/slow) [medium]: "; read -r speed
+      delay_opts=""; [[ "$speed" == "fast" ]] && delay_opts="--min-delay=20 --max-delay=80"; [[ "$speed" == "slow" ]] && delay_opts="--min-delay=200 --max-delay=500"
       log_step "$count registrations for event #$eventNum, $workers parallel"
-      run_bot $count --parallel "$workers" --event-idx "$eventIdx"
+      run_bot $count --parallel "$workers" --event-idx "$eventIdx" $delay_opts $(check_resume)
       ;;
     A|a)
-      reset_csv
       set_target "$TOTAL_NAMES"
       echo -n "Parallel workers? [5]: "; read -r workers
       workers=${workers:-5}
+      echo -n "Delay speed (fast/medium/slow) [medium]: "; read -r speed
+      delay_opts=""; [[ "$speed" == "fast" ]] && delay_opts="--min-delay=20 --max-delay=80"; [[ "$speed" == "slow" ]] && delay_opts="--min-delay=200 --max-delay=500"
       log_step "ALL $TOTAL_NAMES names, $workers parallel"
-      run_bot --parallel "$workers"
+      run_bot --parallel "$workers" $delay_opts $(check_resume)
       ;;
     I|i)
-      reset_csv
       set_target "INF"
       echo -n "Parallel workers? [5]: "; read -r workers
       workers=${workers:-5}
+      echo -n "Delay speed (fast/medium/slow) [medium]: "; read -r speed
+      delay_opts=""; [[ "$speed" == "fast" ]] && delay_opts="--min-delay=20 --max-delay=80"; [[ "$speed" == "slow" ]] && delay_opts="--min-delay=200 --max-delay=500"
       log_step "INFINITE loop, $workers parallel"
-      run_bot --parallel "$workers" --infinite
+      run_bot --parallel "$workers" --infinite $delay_opts
       ;;
     D|d)
       log_step "Starting Dashboard at http://localhost:4000"
@@ -284,7 +301,6 @@ while true; do
       log_step "Tunnel stopped"
       ;;
     B|b)
-      reset_csv
       echo -n "How many? [$TOTAL_NAMES]: "; read -r count
       count=${count:-$TOTAL_NAMES}
       set_target "$count"
@@ -304,14 +320,15 @@ while true; do
         sleep 3
         echo -e "  ${CYAN}Tunnel URL:${NC} https://<random>.trycloudflare.com (see above)"
       fi
+      echo -n "Delay speed (fast/medium/slow) [medium]: "; read -r speed
+      delay_opts=""; [[ "$speed" == "fast" ]] && delay_opts="--min-delay=20 --max-delay=80"; [[ "$speed" == "slow" ]] && delay_opts="--min-delay=200 --max-delay=500"
       sleep 1
       log_step "Running bot (visible browser) + dashboard"
-      run_bot $count --parallel "$workers" --headful $extra
+      run_bot $count --parallel "$workers" --headful $extra $delay_opts $(check_resume)
       kill $DASH_PID $CF_PID 2>/dev/null; wait 2>/dev/null
       log_step "Done"
       ;;
     H|h)
-      reset_csv
       echo -n "How many? [$TOTAL_NAMES]: "; read -r count
       count=${count:-$TOTAL_NAMES}
       set_target "$count"
@@ -332,9 +349,11 @@ while true; do
         echo -e "  ${CYAN}Tunnel URL:${NC} https://<random>.trycloudflare.com (see above)"
       fi
       sleep 1
+      echo -n "Delay speed (fast/medium/slow) [medium]: "; read -r speed
+      delay_opts=""; [[ "$speed" == "fast" ]] && delay_opts="--min-delay=20 --max-delay=80"; [[ "$speed" == "slow" ]] && delay_opts="--min-delay=200 --max-delay=500"
       echo -e "  ${CYAN}Dashboard:${NC} http://localhost:4000"
       log_step "Running headless bot + dashboard"
-      run_bot $count --parallel "$workers" $extra
+      run_bot $count --parallel "$workers" $extra $delay_opts $(check_resume)
       kill $DASH_PID $CF_PID 2>/dev/null; wait 2>/dev/null
       log_step "Done"
       ;;
@@ -368,10 +387,11 @@ while true; do
       echo ""
       echo -n "Proceed with $workers workers using Tor? (y/N): "; read -r confirm
       [[ "$confirm" != "y" && "$confirm" != "Y" ]] && log_warn "Cancelled" && continue
-      reset_csv
       set_target "$count"
       echo -n "Infinite? (y/n) [n]: "; read -r inf
       extra=""; [[ "$inf" == "y" || "$inf" == "Y" ]] && extra="--infinite" && set_target "INF"
+      echo -n "Delay speed (fast/medium/slow) [medium]: "; read -r speed
+      delay_opts=""; [[ "$speed" == "fast" ]] && delay_opts="--min-delay=20 --max-delay=80"; [[ "$speed" == "slow" ]] && delay_opts="--min-delay=200 --max-delay=500"
       log_warn "$tor_ok/$TOR_COUNT Tor instances on ports $TOR_PORTS"
       if ! command -v cloudflared &>/dev/null; then
         log_warn "cloudflared not found — dashboard only (no tunnel)"
@@ -388,7 +408,7 @@ while true; do
       sleep 1
       echo -e "  ${CYAN}Dashboard:${NC} http://localhost:4000"
       log_step "Running headless bot + dashboard + Tor"
-      run_bot $count --parallel "$workers" $extra --tor-ports="$TOR_PORTS"
+      run_bot $count --parallel "$workers" $extra --tor-ports="$TOR_PORTS" $delay_opts $(check_resume)
       kill $DASH_PID $CF_PID 2>/dev/null; wait 2>/dev/null
       log_step "Done"
       ;;

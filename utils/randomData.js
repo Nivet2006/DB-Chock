@@ -4,6 +4,7 @@ const { fakerEN_IN } = require('@faker-js/faker');
 
 const NAMES_FILE = path.join(__dirname, '..', 'NAMES.TXT');
 const COLLEGES_FILE = path.join(__dirname, '..', 'COLLEGES.TXT');
+const DEDUP_FILE = path.join(__dirname, '..', 'logs', 'dedup.json');
 
 function loadLines(filePath) {
   const content = fs.readFileSync(filePath, 'utf-8');
@@ -68,6 +69,25 @@ const UPI_SUFFIXES = [
 const usedEmails = new Set();
 const usedPhones = new Set();
 const usedUtrs = new Set();
+
+function loadDedup() {
+  try {
+    const data = JSON.parse(fs.readFileSync(DEDUP_FILE, 'utf-8'));
+    if (data.emails) data.emails.forEach(e => usedEmails.add(e));
+    if (data.phones) data.phones.forEach(p => usedPhones.add(p));
+    if (data.utrs) data.utrs.forEach(u => usedUtrs.add(u));
+  } catch {}
+}
+function saveDedup() {
+  try {
+    const dir = path.dirname(DEDUP_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(DEDUP_FILE, JSON.stringify({
+      emails: [...usedEmails], phones: [...usedPhones], utrs: [...usedUtrs],
+    }, null, 2), 'utf-8');
+  } catch {}
+}
+loadDedup();
 
 function pickRandom(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
@@ -233,4 +253,6 @@ module.exports = {
   pickRandom,
   randomInt,
   randomDigits,
+  loadDedup,
+  saveDedup,
 };
