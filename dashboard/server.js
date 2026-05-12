@@ -85,6 +85,32 @@ function buildDashboard() {
     --radius-sm: 6px;
   }
   html { font-size: 16px; }
+  @keyframes splashInvert {
+    0% { background: #000; color: #fff; }
+    40% { background: #000; color: #fff; }
+    50% { background: #fff; color: #000; }
+    60% { background: #fff; color: #000; opacity: 1; }
+    100% { opacity: 0; }
+  }
+  @keyframes splashLetter {
+    0% { transform: scale(1.1); opacity: 0; letter-spacing: 12px; }
+    30% { transform: scale(1); opacity: 1; letter-spacing: 4px; }
+    50% { letter-spacing: 4px; }
+    100% { letter-spacing: 4px; }
+  }
+  .splash {
+    position: fixed; inset: 0; z-index: 9999;
+    display: flex; align-items: center; justify-content: center;
+    animation: splashInvert 1.8s ease forwards;
+    pointer-events: none;
+  }
+  .splash span {
+    font-family: 'Inter', sans-serif;
+    font-size: clamp(32px, 8vw, 80px);
+    font-weight: 800;
+    letter-spacing: 4px;
+    animation: splashLetter 1.8s ease forwards;
+  }
   body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     background: var(--bg);
@@ -449,6 +475,7 @@ function buildDashboard() {
 </style>
 </head>
 <body>
+<div class="splash"><span>SNAKEKING</span></div>
 <div class="header">
   <div class="brand">
     <div class="brand-dot"></div>
@@ -691,6 +718,11 @@ function buildDashboard() {
     } catch(e) {}
   }
   document.getElementById('kill-password').addEventListener('keydown', e => { if (e.key === 'Enter') submitKill(); });
+
+  setTimeout(() => {
+    const s = document.querySelector('.splash');
+    if (s) s.remove();
+  }, 2000);
 
   update();
   setInterval(update, 2000);
