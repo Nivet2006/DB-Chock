@@ -70,7 +70,7 @@ async function fillField(page, placeholder, value, label, nth = 0) {
   await wait(randomInt(MIN_DELAY, MAX_DELAY));
 }
 
-async function runRegistration(browser, regIndex, totalCount) {
+async function runRegistration(browser, regIndex, totalCount, djMode) {
   const regData = generateRegistrationData();
   let eventName = 'Unknown';
 
@@ -107,77 +107,97 @@ async function runRegistration(browser, regIndex, totalCount) {
     log(`${tag} ▶ ${regData.fullName} | ${regData.email}`);
 
     log(`${tag} 🌐 Loading site...`);
-    await page.goto(BASE_URL + '#events', { waitUntil: 'networkidle', timeout: 60000 });
-    await wait(2000);
-    log(`${tag} ✅ Page loaded`);
 
-    const skipEvents = ['DJ NIGHT', 'BATTLE OF BANDS', 'CLASSICAL GROUP', 'WESTERN GROUP', 'BGMI', 'FASHION', 'TREASURE HUNT'];
-    let eventSeeds = [];
+    if (djMode) {
+      await page.goto(BASE_URL + '#special-guest', { waitUntil: 'networkidle', timeout: 60000 });
+      await wait(2000);
+      log(`${tag} ✅ Page loaded`);
+      eventName = 'DJ NIGHT';
+      log(`${tag} 🎯 DJ Night ticket`);
 
-    log(`${tag} 🔍 Finding event cards...`);
+      const buyBtn = page.locator('button', { hasText: 'BUY TICKETS NOW' }).first();
+      await buyBtn.waitFor({ state: 'visible', timeout: 10000 });
+      await buyBtn.scrollIntoViewIfNeeded();
+      await buyBtn.click({ force: true, noWaitAfter: true });
+      await wait(2000);
+      log(`${tag} ✅ BUY TICKETS NOW clicked`);
 
-    let card = null;
-    let modal = null;
-    const maxRetries = EVENT_IDX !== null ? 1 : 10;
+      await page.locator('.fixed.inset-0').filter({ has: page.locator('text=Read Protocol') }).first()
+        .waitFor({ state: 'attached', timeout: 10000 });
+      log(`${tag} ✅ Modal opened for DJ Night`);
+    } else {
+      await page.goto(BASE_URL + '#events', { waitUntil: 'networkidle', timeout: 60000 });
+      await wait(2000);
+      log(`${tag} ✅ Page loaded`);
 
-    for (let retryEvent = 0; retryEvent < maxRetries; retryEvent++) {
-      if (retryEvent > 0) {
-        log(`${tag} 🔄 Trying another event...`);
-        if (modal) await page.evaluate(() => {
-          const c = document.querySelector('.fixed.inset-0');
-          if (c) c.querySelector('button')?.click();
-        });
-        await wait(500);
-      }
+      const skipEvents = ['DJ NIGHT', 'BATTLE OF BANDS', 'CLASSICAL GROUP', 'WESTERN GROUP', 'BGMI', 'FASHION', 'TREASURE HUNT'];
+      let eventSeeds = [];
 
-      const cards = page.locator('text=Access Protocol');
-      await cards.first().waitFor({ state: 'attached', timeout: 30000 });
+      log(`${tag} 🔍 Finding event cards...`);
 
-      if (eventSeeds.length === 0) {
-        if (EVENT_IDX !== null) {
-          let n;
-          try {
-            const p = cards.nth(EVENT_IDX).locator('xpath=ancestor::div[contains(@class,"border-l")]');
-            n = await p.locator('h3').first().textContent({ timeout: 2000 });
-          } catch { n = ''; }
-          eventSeeds.push({ idx: EVENT_IDX, name: n.trim() || `Event ${EVENT_IDX + 1}` });
-        } else {
-          for (let i = 0; i < await cards.count(); i++) {
+      let card = null;
+      let modal = null;
+      const maxRetries = EVENT_IDX !== null ? 1 : 10;
+
+      for (let retryEvent = 0; retryEvent < maxRetries; retryEvent++) {
+        if (retryEvent > 0) {
+          log(`${tag} 🔄 Trying another event...`);
+          if (modal) await page.evaluate(() => {
+            const c = document.querySelector('.fixed.inset-0');
+            if (c) c.querySelector('button')?.click();
+          });
+          await wait(500);
+        }
+
+        const cards = page.locator('text=Access Protocol');
+        await cards.first().waitFor({ state: 'attached', timeout: 30000 });
+
+        if (eventSeeds.length === 0) {
+          if (EVENT_IDX !== null) {
             let n;
             try {
-              const p = cards.nth(i).locator('xpath=ancestor::div[contains(@class,"border-l")]');
-              n = await p.locator('h3').first().textContent({ timeout: 1000 });
+              const p = cards.nth(EVENT_IDX).locator('xpath=ancestor::div[contains(@class,"border-l")]');
+              n = await p.locator('h3').first().textContent({ timeout: 2000 });
             } catch { n = ''; }
-            if (!skipEvents.some(c => n.toUpperCase().includes(c)) && !usedEvents.has(n.toUpperCase())) eventSeeds.push({ idx: i, name: n || `Event ${i + 1}` });
+            eventSeeds.push({ idx: EVENT_IDX, name: n.trim() || `Event ${EVENT_IDX + 1}` });
+          } else {
+            for (let i = 0; i < await cards.count(); i++) {
+              let n;
+              try {
+                const p = cards.nth(i).locator('xpath=ancestor::div[contains(@class,"border-l")]');
+                n = await p.locator('h3').first().textContent({ timeout: 1000 });
+              } catch { n = ''; }
+              if (!skipEvents.some(c => n.toUpperCase().includes(c)) && !usedEvents.has(n.toUpperCase())) eventSeeds.push({ idx: i, name: n || `Event ${i + 1}` });
+            }
           }
         }
+
+        if (eventSeeds.length === 0) throw new Error('No suitable events');
+        const pick = eventSeeds.splice(randomInt(0, eventSeeds.length - 1), 1)[0];
+        card = cards.nth(pick.idx);
+        try {
+          const parent = card.locator('xpath=ancestor::div[contains(@class,"border-l")]');
+          eventName = await parent.locator('h3').first().textContent({ timeout: 2000 });
+        } catch { eventName = pick.name; }
+        log(`${tag} 🎯 ${EVENT_IDX !== null ? 'Targeting' : 'Trying'}: "${eventName}"`);
+        ongoingEntry.event = eventName;
+        try {
+          const prev = JSON.parse(fs.readFileSync(ONGOING_FILE, 'utf-8') || '[]');
+          const idx = prev.findIndex(e => e.name === ongoingEntry.name && e.email === ongoingEntry.email);
+          if (idx >= 0) prev[idx].event = eventName;
+          writeOngoing(prev);
+        } catch {}
+
+        await card.scrollIntoViewIfNeeded();
+        await wait(300);
+        await card.click({ force: true, noWaitAfter: true });
+        await wait(2000);
+
+        modal = page.locator('.fixed.inset-0').filter({ has: page.locator('text=Read Protocol') }).first();
+        await modal.waitFor({ state: 'attached', timeout: 10000 });
+        log(`${tag} ✅ Modal opened for "${eventName}"`);
+        break;
       }
-
-      if (eventSeeds.length === 0) throw new Error('No suitable events');
-      const pick = eventSeeds.splice(randomInt(0, eventSeeds.length - 1), 1)[0];
-      card = cards.nth(pick.idx);
-      try {
-        const parent = card.locator('xpath=ancestor::div[contains(@class,"border-l")]');
-        eventName = await parent.locator('h3').first().textContent({ timeout: 2000 });
-      } catch { eventName = pick.name; }
-      log(`${tag} 🎯 ${EVENT_IDX !== null ? `Targeting` : `Trying`}: "${eventName}"`);
-      ongoingEntry.event = eventName;
-      try {
-        const prev = JSON.parse(fs.readFileSync(ONGOING_FILE, 'utf-8') || '[]');
-        const idx = prev.findIndex(e => e.name === ongoingEntry.name && e.email === ongoingEntry.email);
-        if (idx >= 0) prev[idx].event = eventName;
-        writeOngoing(prev);
-      } catch {}
-
-      await card.scrollIntoViewIfNeeded();
-      await wait(300);
-      await card.click({ force: true, noWaitAfter: true });
-      await wait(2000);
-
-      modal = page.locator('.fixed.inset-0').filter({ has: page.locator('text=Read Protocol') }).first();
-      await modal.waitFor({ state: 'attached', timeout: 10000 });
-      log(`${tag} ✅ Modal opened for "${eventName}"`);
-      break;
     }
 
     log(`${tag} ✅ Modal confirmed (${eventName})`);
@@ -495,6 +515,7 @@ async function runPool(total, concurrency, fn) {
   const COUNT = INFINITE ? Infinity : (countIdx ? parseInt(countIdx) : fs.readFileSync(path.join(__dirname, 'NAMES.TXT'), 'utf-8').split('\n').filter(l => l.trim()).length);
   const PARALLEL = parseInt(args.find(a => a.startsWith('--parallel') || a.startsWith('-p'))?.split('=')[1] || args[args.indexOf('--parallel') + 1] || args[args.indexOf('-p') + 1] || '5', 10);
   const HEADLESS = args.includes('--headful') ? false : true;
+const DJ_MODE = args.includes('--dj');
 
   log(`═`.repeat(50));
   log(`ESTRALIS-BOT — ${INFINITE ? 'INFINITE' : COUNT} regs | ${PARALLEL} parallel | Headless: ${HEADLESS}${EVENT_IDX !== null ? ' | Event:' + EVENT_IDX : ''}${RESUME ? ' | RESUME' : ''} | Delay: ${MIN_DELAY}-${MAX_DELAY}ms`);
@@ -517,7 +538,7 @@ async function runPool(total, concurrency, fn) {
   process.on('SIGTERM', saveOnExit);
 
   const start = Date.now();
-  const succeeded = await runPool(COUNT, PARALLEL, (i) => runRegistration(browser, i, COUNT));
+  const succeeded = await runPool(COUNT, PARALLEL, (i) => runRegistration(browser, i, COUNT, DJ_MODE));
 
   await browser.close();
   saveDedup();

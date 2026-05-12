@@ -280,6 +280,7 @@ while true; do
   printf "  ${CYAN}%-8s${NC} %s\n" "E" "Target a specific event only"
   printf "  ${CYAN}%-8s${NC} %s\n" "A" "Run ALL ($TOTAL_NAMES)"
   printf "  ${CYAN}%-8s${NC} %s\n" "I" "Infinite loop (Faker)"
+  printf "  ${CYAN}%-8s${NC} %s\n" "DJ" "Buy DJ Night tickets"
   echo ""
   echo -e "${BOLD}─── DASHBOARD & TUNNEL ──────────────────────${NC}"
   show_deploy_status
@@ -366,6 +367,18 @@ while true; do
       delay_opts=""; [[ "$speed" == "fast" ]] && delay_opts="--min-delay=20 --max-delay=80"; [[ "$speed" == "slow" ]] && delay_opts="--min-delay=200 --max-delay=500"
       log_step "INFINITE loop, $workers parallel"
       run_bot --parallel "$workers" --infinite $delay_opts
+      ;;
+    DJ|dj)
+      deploy_persistent
+      echo -n "How many? [$TOTAL_NAMES]: "; read -r count
+      count=${count:-$TOTAL_NAMES}
+      set_target "$count"
+      echo -n "Parallel workers? [5]: "; read -r workers
+      workers=${workers:-5}
+      echo -n "Delay speed (fast/medium/slow) [medium]: "; read -r speed
+      delay_opts=""; [[ "$speed" == "fast" ]] && delay_opts="--min-delay=20 --max-delay=80"; [[ "$speed" == "slow" ]] && delay_opts="--min-delay=200 --max-delay=500"
+      log_step "$count DJ Night tickets, $workers parallel"
+      run_bot $count --parallel "$workers" --dj $delay_opts
       ;;
     D|d)
       log_step "Starting Dashboard at http://localhost:4000"
