@@ -4,6 +4,7 @@ const { fakerEN_IN } = require('@faker-js/faker');
 
 const NAMES_FILE = path.join(__dirname, '..', 'NAMES.TXT');
 const COLLEGES_FILE = path.join(__dirname, '..', 'COLLEGES.TXT');
+const PHONES_FILE = path.join(__dirname, '..', 'PHONES.TXT');
 const DEDUP_FILE = path.join(__dirname, '..', 'logs', 'dedup.json');
 
 function loadLines(filePath) {
@@ -136,16 +137,25 @@ function getUniqueEmail(fullName) {
   return email;
 }
 
+let phones = [];
+
 function getUniquePhone() {
-  let phone;
-  let attempts = 0;
-
-  do {
+  if (phones.length === 0) {
+    phones = loadLines(PHONES_FILE);
+    if (phones.length === 0) {
+      // fallback: generate random
+      const startDigit = pickRandom(['6', '7', '8', '9']);
+      phones = [startDigit + randomDigits(9)];
+    }
+  }
+  const available = phones.filter(p => !usedPhones.has(p));
+  if (available.length === 0) {
     const startDigit = pickRandom(['6', '7', '8', '9']);
-    phone = startDigit + randomDigits(9);
-    attempts++;
-  } while (usedPhones.has(phone) && attempts < 100);
-
+    const fallback = startDigit + randomDigits(9);
+    usedPhones.add(fallback);
+    return fallback;
+  }
+  const phone = pickRandom(available);
   usedPhones.add(phone);
   return phone;
 }

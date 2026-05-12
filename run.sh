@@ -239,6 +239,9 @@ check_prereqs() {
     log_warn "COLLEGES.TXT not found — creating placeholder"
     echo "Default College" > "$SCRIPT_DIR/COLLEGES.TXT"
   fi
+  if [ ! -f "$SCRIPT_DIR/PHONES.TXT" ]; then
+    log_warn "PHONES.TXT not found — will generate random phones"
+  fi
   return 0
 }
 
