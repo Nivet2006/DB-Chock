@@ -85,31 +85,31 @@ function buildDashboard() {
     --radius-sm: 6px;
   }
   html { font-size: 16px; }
-  @keyframes splashInvert {
-    0% { background: #000; color: #fff; }
-    40% { background: #000; color: #fff; }
-    50% { background: #fff; color: #000; }
-    60% { background: #fff; color: #000; opacity: 1; }
-    100% { opacity: 0; }
+  @keyframes splashIn {
+    0% { transform: scale(1.15); opacity: 0; letter-spacing: 16px; }
+    100% { transform: scale(1); opacity: 1; letter-spacing: 4px; }
   }
-  @keyframes splashLetter {
-    0% { transform: scale(1.1); opacity: 0; letter-spacing: 12px; }
-    30% { transform: scale(1); opacity: 1; letter-spacing: 4px; }
-    50% { letter-spacing: 4px; }
-    100% { letter-spacing: 4px; }
+  @keyframes splashPhase1 {
+    0% { background: #000; color: #fff; }
+    100% { background: #000; color: #fff; }
+  }
+  @keyframes splashPhase2 {
+    0% { background: #fff; color: #000; }
+    100% { background: #fff; color: #000; }
+  }
+  @keyframes splashFadeOut {
+    0% { opacity: 1; }
+    100% { opacity: 0; }
   }
   .splash {
     position: fixed; inset: 0; z-index: 9999;
     display: flex; align-items: center; justify-content: center;
-    animation: splashInvert 1.8s ease forwards;
     pointer-events: none;
   }
   .splash span {
     font-family: 'Inter', sans-serif;
-    font-size: clamp(32px, 8vw, 80px);
+    font-size: clamp(36px, 10vw, 100px);
     font-weight: 800;
-    letter-spacing: 4px;
-    animation: splashLetter 1.8s ease forwards;
   }
   body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -475,7 +475,7 @@ function buildDashboard() {
 </style>
 </head>
 <body>
-<div class="splash"><span>SNAKEKING</span></div>
+<div class="splash" id="splash"><span id="splash-text">SNAKEKING</span></div>
 <div class="header">
   <div class="brand">
     <div class="brand-dot"></div>
@@ -719,10 +719,28 @@ function buildDashboard() {
   }
   document.getElementById('kill-password').addEventListener('keydown', e => { if (e.key === 'Enter') submitKill(); });
 
-  setTimeout(() => {
-    const s = document.querySelector('.splash');
-    if (s) s.remove();
-  }, 2000);
+  (function splashSequence() {
+    const splash = document.getElementById('splash');
+    const text = document.getElementById('splash-text');
+    if (!splash) return;
+    splash.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;pointer-events:none;background:#000;color:#fff;transition:background 0.8s ease,color 0.8s ease';
+    text.style.cssText = 'font-family:Inter,sans-serif;font-size:clamp(36px,10vw,100px);font-weight:800;letter-spacing:4px;animation:splashIn 0.8s ease forwards';
+    // Phase 1: black bg, white text — 5s
+    setTimeout(() => {
+      // Phase 2: smooth transition to white bg, black text — 0.8s
+      splash.style.background = '#fff';
+      splash.style.color = '#000';
+      // Hold for 5s
+      setTimeout(() => {
+        // Phase 3: fade out
+        text.style.animation = 'splashFadeOut 0.8s ease forwards';
+        splash.style.background = 'transparent';
+        setTimeout(() => {
+          splash.remove();
+        }, 900);
+      }, 5000);
+    }, 5000);
+  })();
 
   update();
   setInterval(update, 2000);
