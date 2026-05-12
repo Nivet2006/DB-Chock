@@ -55,12 +55,16 @@ deploy_persistent() {
   cloudflared tunnel --url http://localhost:4000 &>/tmp/cloudflared.log &
   tpid=$!
   echo "$tpid" > "$TUNNEL_PID_FILE"
-  sleep 4
-  local url=$(grep -oP 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' /tmp/cloudflared.log 2>/dev/null | head -1)
+  local url="" attempt=0
+  while [ -z "$url" ] && [ $attempt -lt 8 ]; do
+    sleep 2
+    url=$(grep -oP 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' /tmp/cloudflared.log 2>/dev/null | head -1)
+    attempt=$((attempt + 1))
+  done
   if [ -n "$url" ]; then
     echo -e "  ${CYAN}Tunnel URL:${NC} ${url}"
   else
-    log_warn "Tunnel starting... check 'L' for logs"
+    log_warn "Tunnel not ready yet — check 'L' for logs"
   fi
   return 0
 }
