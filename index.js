@@ -312,8 +312,18 @@ async function runRegistration(browser, regIndex, totalCount, djMode) {
       counters[key] = (counters[key] || 0) + 1;
       const nth = counters[key] - 1;
 
-      if (/college|institution/.test(ph)) {
+      if (/college|institution|search/i.test(ph)) {
         await fillField(page, placeholder, regData.college, 'College', nth);
+        await wait(500);
+        const item = page.locator('.fixed.inset-0 div[class*="cursor-pointer"]', { hasText: regData.college }).first();
+        if (await item.count() > 0) {
+          await item.click();
+          await wait(200);
+        } else {
+          // fallback: press Enter to select first suggestion
+          await page.locator(`input[placeholder*="${placeholder}" i]`).first().press('Enter');
+          await wait(300);
+        }
       } else if (/email/.test(ph)) {
         await fillField(page, placeholder, regData.email, 'Email', nth);
       } else if (/phone|mobile/.test(ph)) {
