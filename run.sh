@@ -125,14 +125,21 @@ check_resume() {
 }
 
 run_bot() {
+  local before=$(tail -n +2 "$CSV" 2>/dev/null | grep -c . 2>/dev/null || echo 0)
   $BOT "$@"
   local rc=$?
+  local after=$(tail -n +2 "$CSV" 2>/dev/null | grep -c . 2>/dev/null || echo 0)
+  local run_total=$((after - before))
+  local run_ok=$(tail -n +2 "$CSV" 2>/dev/null | tail -n "$run_total" 2>/dev/null | grep -c ',SUCCESS' 2>/dev/null || echo 0)
+  local run_fail=$((run_total - run_ok))
   if [ $rc -ne 0 ]; then
     log_err "Bot exited with code $rc — check logs above for details"
   else
     log_step "Bot finished successfully"
   fi
-  echo "" && show_stats
+  echo ""
+  echo -e "  ${BOLD}THIS RUN${NC}  ${GREEN}OK:${NC} $run_ok ${BOLD}||${NC} ${RED}FAIL:${NC} $run_fail ${BOLD}||${NC} ${YELLOW}TOTAL:${NC} $run_total"
+  echo ""
   return $rc
 }
 
@@ -415,6 +422,7 @@ while true; do
       ;;
     ZZ|zz)
       setup_tor || continue
+      sudo systemctl stop tor 2>/dev/null; sudo service tor stop 2>/dev/null; pkill tor 2>/dev/null; sleep 1
       echo -n "How many? [$TOTAL_NAMES]: "; read -r count
       count=${count:-$TOTAL_NAMES}
       echo -n "Parallel workers? [10]: "; read -r workers
@@ -439,7 +447,14 @@ while true; do
       echo ""
       echo -e "  ${BOLD}🌐 IP CHECK${NC}"
       echo -e "  ${YELLOW}Real IP:${NC}     $(get_ip)"
-      echo -e "  ${YELLOW}Tor IP:${NC}      $(get_ip "socks5://127.0.0.1:$FIRST_PORT")"
+      sleep 3
+      local tor_ip=""
+      for i in 1 2 3; do
+        tor_ip=$(get_ip "socks5://127.0.0.1:$FIRST_PORT")
+        [ "$tor_ip" != "unreachable" ] && break
+        sleep 2
+      done
+      echo -e "  ${YELLOW}Tor IP:${NC}      ${tor_ip}"
       echo ""
       echo -n "Proceed with $workers workers using Tor? (y/N): "; read -r confirm
       [[ "$confirm" != "y" && "$confirm" != "Y" ]] && log_warn "Cancelled" && continue

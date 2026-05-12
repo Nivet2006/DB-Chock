@@ -22,7 +22,7 @@ const EMAIL_DOMAINS = [
   'outlook.com',
   'yahoo.com',
   'hotmail.com',
-  'protonmail.com',
+  'aol.com',
   'icloud.com',
 ];
 
