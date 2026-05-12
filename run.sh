@@ -118,7 +118,7 @@ check_resume() {
     local done=$(grep -oP '"done":\s*\K\d+' "$cp" 2>/dev/null || echo 0)
     local total=$(grep -oP '"total":\s*\K\d+' "$cp" 2>/dev/null || echo 0)
     if [ "$done" -gt 0 ] && [ "$total" -gt 0 ]; then
-      echo -n "Checkpoint found ($done/$total done). Resume? (y/N): "; read -r ans
+      echo -n "Checkpoint found ($done/$total done). Resume? (y/N): " >&2; read -r ans
       [[ "$ans" == "y" || "$ans" == "Y" ]] && echo "--resume" || echo ""
     fi
   fi
