@@ -85,22 +85,6 @@ function buildDashboard() {
     --radius-sm: 6px;
   }
   html { font-size: 16px; }
-  @keyframes splashFadeIn {
-    0% { transform: scale(1.08); opacity: 0; }
-    100% { transform: scale(1); opacity: 1; }
-  }
-  @keyframes splashZoomIn {
-    0% { transform: scale(1); }
-    100% { transform: scale(1.4); }
-  }
-  @keyframes splashZoomOut {
-    0% { transform: scale(1.4); }
-    100% { transform: scale(1); }
-  }
-  @keyframes splashFadeOut {
-    0% { opacity: 1; }
-    100% { opacity: 0; }
-  }
   .splash {
     position: fixed; inset: 0; z-index: 9999;
     display: flex; align-items: center; justify-content: center;
@@ -726,37 +710,49 @@ function buildDashboard() {
   (function splashSequence() {
     const splash = document.getElementById('splash');
     const text = document.getElementById('splash-text');
-    if (!splash) return;
+    if (!splash || !text) return;
 
-    // Phase 1: 0–0.8s — fade in, black bg white text
-    text.style.animation = 'splashFadeIn 0.8s ease forwards';
+    const ease = { easing: 'ease' };
 
-    // Phase 2: 0.8s–2.8s — zoom in text (scale 1→1.4)
+    // Phase 1: 0–0.8s — fade in with slight zoom
+    text.animate([
+      { transform: 'scale(1.08)', opacity: 0 },
+      { transform: 'scale(1)', opacity: 1 }
+    ], { duration: 800, fill: 'forwards', ...ease });
+
+    // Phase 2: 0.8s–2.8s — zoom in (scale 1→1.4)
     setTimeout(() => {
-      text.style.animation = 'splashZoomIn 2s ease forwards';
+      text.animate([
+        { transform: 'scale(1)' },
+        { transform: 'scale(1.4)' }
+      ], { duration: 2000, fill: 'forwards', ...ease });
     }, 800);
 
-    // Phase 3: 2.8s–3.6s — smooth invert (bg black→white, text white→black)
+    // Phase 3: 2.8s–3.6s — invert bg→white, text→black
     setTimeout(() => {
       splash.style.background = '#fff';
       text.style.color = '#000';
     }, 2800);
 
-    // Phase 4: 3.6s–5.6s — zoom out text (scale 1.4→1) on white bg black text
+    // Phase 4: 3.6s–5.6s — zoom out (1.4→1) on white bg
     setTimeout(() => {
-      text.style.animation = 'splashZoomOut 2s ease forwards';
+      text.animate([
+        { transform: 'scale(1.4)' },
+        { transform: 'scale(1)' }
+      ], { duration: 2000, fill: 'forwards', ...ease });
     }, 3600);
 
     // Phase 5: 5.6s–6.6s — fade out
     setTimeout(() => {
-      text.style.animation = 'splashFadeOut 1s ease forwards';
+      text.animate([
+        { opacity: 1 },
+        { opacity: 0 }
+      ], { duration: 1000, fill: 'forwards', ...ease });
       splash.style.background = 'transparent';
     }, 5600);
 
-    // Cleanup: remove splash from DOM
-    setTimeout(() => {
-      splash.remove();
-    }, 6800);
+    // Cleanup
+    setTimeout(() => splash.remove(), 6800);
   })();
 
   update();
