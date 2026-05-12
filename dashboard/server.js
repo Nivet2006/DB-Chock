@@ -665,8 +665,8 @@ function buildDashboard() {
   function filterLogs() {
     const q = document.getElementById('log-search').value.toLowerCase();
     const box = document.getElementById('log-box');
-    const lines = activeLogText.split('\n').filter(l => l.toLowerCase().includes(q));
-    box.textContent = lines.join('\n');
+    const lines = activeLogText.split('\\n').filter(l => l.toLowerCase().includes(q));
+    box.textContent = lines.join('\\n');
     box.scrollTop = box.scrollHeight;
   }
 
