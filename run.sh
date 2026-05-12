@@ -11,11 +11,69 @@ CSV="$SCRIPT_DIR/output.csv"
 DASHBOARD="node $SCRIPT_DIR/dashboard/server.js"
 TARGET_FLAG="$SCRIPT_DIR/logs/target.flag"
 
+PID_DIR="$SCRIPT_DIR/logs"
+DASH_PID_FILE="$PID_DIR/dashboard.pid"
+TUNNEL_PID_FILE="$PID_DIR/tunnel.pid"
+
+is_running() {
+  local pid=$1
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+deploy_persistent() {
+  # Start dashboard if not running
+  local dpid=""
+  if [ -f "$DASH_PID_FILE" ]; then
+    dpid=$(cat "$DASH_PID_FILE")
+    if is_running "$dpid"; then
+      log_step "Dashboard already running (PID $dpid)"
+    else
+      dpid=""
+    fi
+  fi
+  if [ -z "$dpid" ]; then
+    $DASHBOARD &
+    dpid=$!
+    echo "$dpid" > "$DASH_PID_FILE"
+    log_step "Dashboard started (PID $dpid) — http://localhost:4000"
+  fi
+
+  # Start tunnel if not running (skip if cloudflared missing)
+  if ! command -v cloudflared &>/dev/null; then
+    log_warn "cloudflared not found — dashboard only (install with S for tunnel)"
+    return 0
+  fi
+  local tpid=""
+  if [ -f "$TUNNEL_PID_FILE" ]; then
+    tpid=$(cat "$TUNNEL_PID_FILE")
+    if is_running "$tpid"; then
+      log_step "Tunnel already running (PID $tpid)"
+      return 0
+    fi
+  fi
+  sleep 1
+  cloudflared tunnel --url http://localhost:4000 &>/tmp/cloudflared.log &
+  tpid=$!
+  echo "$tpid" > "$TUNNEL_PID_FILE"
+  sleep 4
+  local url=$(grep -oP 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' /tmp/cloudflared.log 2>/dev/null | head -1)
+  if [ -n "$url" ]; then
+    echo -e "  ${CYAN}Tunnel URL:${NC} ${url}"
+  else
+    log_warn "Tunnel starting... check 'L' for logs"
+  fi
+  return 0
+}
+
 cleanup() {
+  local dpid tpid
+  [ -f "$DASH_PID_FILE" ] && dpid=$(cat "$DASH_PID_FILE") && is_running "$dpid" && kill "$dpid" 2>/dev/null
+  [ -f "$TUNNEL_PID_FILE" ] && tpid=$(cat "$TUNNEL_PID_FILE") && is_running "$tpid" && kill "$tpid" 2>/dev/null
   pkill -9 -f "cloudflared" 2>/dev/null
   pkill -9 -f "estralis-bot/index.js" 2>/dev/null
   pkill -9 -f "dashboard/server.js" 2>/dev/null
   pkill -9 -f "tor.*--SocksPort" 2>/dev/null
+  rm -f "$DASH_PID_FILE" "$TUNNEL_PID_FILE" 2>/dev/null
 }
 trap cleanup EXIT
 
@@ -173,6 +231,21 @@ check_prereqs() {
   return 0
 }
 
+show_deploy_status() {
+  local dash="stopped" tunnel="stopped"
+  if [ -f "$DASH_PID_FILE" ]; then
+    local p=$(cat "$DASH_PID_FILE")
+    is_running "$p" && dash="active"
+  fi
+  if [ -f "$TUNNEL_PID_FILE" ]; then
+    local p=$(cat "$TUNNEL_PID_FILE")
+    is_running "$p" && tunnel="active"
+  fi
+  local url=""
+  [ -f /tmp/cloudflared.log ] && url=$(grep -oP 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' /tmp/cloudflared.log 2>/dev/null | head -1)
+  echo -e "  ${BOLD}DASH:${NC} ${GREEN}$dash${NC}  ${BOLD}TUNNEL:${NC} ${GREEN}$tunnel${NC}${url:+  ${CYAN}→${NC} ${url}}"
+}
+
 print_banner
 check_prereqs || exit 1
 
@@ -195,11 +268,12 @@ while true; do
   printf "  ${CYAN}%-8s${NC} %s\n" "I" "Infinite loop (Faker)"
   echo ""
   echo -e "${BOLD}─── DASHBOARD & TUNNEL ──────────────────────${NC}"
+  show_deploy_status
   printf "  ${CYAN}%-8s${NC} %s\n" "D" "Dashboard only"
-  printf "  ${CYAN}%-8s${NC} %s\n" "T" "Dashboard + Cloudflare Tunnel"
-  printf "  ${CYAN}%-8s${NC} %s\n" "B" "Bot + Dashboard + Tunnel (visible browser)"
-  printf "  ${CYAN}%-8s${NC} %s ${YELLOW}(no browser)${NC}\n" "H" "Headless Bot + Dashboard + Tunnel"
-  printf "  ${CYAN}%-8s${NC} %s\n" "ZZ" "Headless + Dashboard + Tunnel + Tor"
+  printf "  ${CYAN}%-8s${NC} %s\n" "T" "Dashboard + Tunnel (foreground, press Enter to stop)"
+  printf "  ${CYAN}%-8s${NC} %s\n" "B" "Bot + visible browser"
+  printf "  ${CYAN}%-8s${NC} %s ${YELLOW}(no browser)${NC}\n" "H" "Headless bot"
+  printf "  ${CYAN}%-8s${NC} %s\n" "ZZ" "Headless + Tor"
   echo ""
   echo -e "${BOLD}─── CONTROLS ────────────────────────────────${NC}"
   printf "  ${CYAN}%-8s${NC} %s\n" "K" "Kill all running processes"
@@ -218,10 +292,12 @@ while true; do
       workers=${workers:-$choice}
       echo -n "Delay speed (fast/medium/slow) [medium]: "; read -r speed
       delay_opts=""; [[ "$speed" == "fast" ]] && delay_opts="--min-delay=20 --max-delay=80"; [[ "$speed" == "slow" ]] && delay_opts="--min-delay=200 --max-delay=500"
+      deploy_persistent
       log_step "$choice registrations, $workers parallel"
       run_bot $choice --parallel "$workers" $delay_opts $(check_resume)
       ;;
     C|c)
+      deploy_persistent
       echo -n "How many? [10]: "; read -r count
       count=${count:-10}
       set_target "$count"
@@ -233,6 +309,7 @@ while true; do
       run_bot $count --parallel "$workers" $delay_opts $(check_resume)
       ;;
     E|e)
+      deploy_persistent
       log_step "Fetching event list from estralisfest..."
       OUTPUT=$(node "$SCRIPT_DIR/index.js" --list-events 2>/dev/null)
       echo "$OUTPUT"
@@ -257,6 +334,7 @@ while true; do
       run_bot $count --parallel "$workers" --event-idx "$eventIdx" $delay_opts $(check_resume)
       ;;
     A|a)
+      deploy_persistent
       set_target "$TOTAL_NAMES"
       echo -n "Parallel workers? [5]: "; read -r workers
       workers=${workers:-5}
@@ -266,6 +344,7 @@ while true; do
       run_bot --parallel "$workers" $delay_opts $(check_resume)
       ;;
     I|i)
+      deploy_persistent
       set_target "INF"
       echo -n "Parallel workers? [5]: "; read -r workers
       workers=${workers:-5}
@@ -301,6 +380,7 @@ while true; do
       log_step "Tunnel stopped"
       ;;
     B|b)
+      deploy_persistent
       echo -n "How many? [$TOTAL_NAMES]: "; read -r count
       count=${count:-$TOTAL_NAMES}
       set_target "$count"
@@ -308,27 +388,14 @@ while true; do
       workers=${workers:-5}
       echo -n "Infinite? (y/n) [n]: "; read -r inf
       extra=""; [[ "$inf" == "y" || "$inf" == "Y" ]] && extra="--infinite" && set_target "INF"
-      if ! command -v cloudflared &>/dev/null; then
-        log_warn "cloudflared not found — dashboard only (no tunnel)"
-      fi
-      $DASHBOARD &
-      DASH_PID=$!
-      sleep 1
-      if command -v cloudflared &>/dev/null; then
-        cloudflared tunnel --url http://localhost:4000 &
-        CF_PID=$!
-        sleep 3
-        echo -e "  ${CYAN}Tunnel URL:${NC} https://<random>.trycloudflare.com (see above)"
-      fi
       echo -n "Delay speed (fast/medium/slow) [medium]: "; read -r speed
       delay_opts=""; [[ "$speed" == "fast" ]] && delay_opts="--min-delay=20 --max-delay=80"; [[ "$speed" == "slow" ]] && delay_opts="--min-delay=200 --max-delay=500"
       sleep 1
       log_step "Running bot (visible browser) + dashboard"
       run_bot $count --parallel "$workers" --headful $extra $delay_opts $(check_resume)
-      kill $DASH_PID $CF_PID 2>/dev/null; wait 2>/dev/null
-      log_step "Done"
       ;;
     H|h)
+      deploy_persistent
       echo -n "How many? [$TOTAL_NAMES]: "; read -r count
       count=${count:-$TOTAL_NAMES}
       set_target "$count"
@@ -336,26 +403,11 @@ while true; do
       workers=${workers:-10}
       echo -n "Infinite? (y/n) [n]: "; read -r inf
       extra=""; [[ "$inf" == "y" || "$inf" == "Y" ]] && extra="--infinite" && set_target "INF"
-      if ! command -v cloudflared &>/dev/null; then
-        log_warn "cloudflared not found — dashboard only (no tunnel)"
-      fi
-      $DASHBOARD &
-      DASH_PID=$!
-      sleep 1
-      if command -v cloudflared &>/dev/null; then
-        cloudflared tunnel --url http://localhost:4000 &
-        CF_PID=$!
-        sleep 3
-        echo -e "  ${CYAN}Tunnel URL:${NC} https://<random>.trycloudflare.com (see above)"
-      fi
-      sleep 1
       echo -n "Delay speed (fast/medium/slow) [medium]: "; read -r speed
       delay_opts=""; [[ "$speed" == "fast" ]] && delay_opts="--min-delay=20 --max-delay=80"; [[ "$speed" == "slow" ]] && delay_opts="--min-delay=200 --max-delay=500"
       echo -e "  ${CYAN}Dashboard:${NC} http://localhost:4000"
       log_step "Running headless bot + dashboard"
       run_bot $count --parallel "$workers" $extra $delay_opts $(check_resume)
-      kill $DASH_PID $CF_PID 2>/dev/null; wait 2>/dev/null
-      log_step "Done"
       ;;
     ZZ|zz)
       setup_tor || continue
@@ -392,25 +444,11 @@ while true; do
       extra=""; [[ "$inf" == "y" || "$inf" == "Y" ]] && extra="--infinite" && set_target "INF"
       echo -n "Delay speed (fast/medium/slow) [medium]: "; read -r speed
       delay_opts=""; [[ "$speed" == "fast" ]] && delay_opts="--min-delay=20 --max-delay=80"; [[ "$speed" == "slow" ]] && delay_opts="--min-delay=200 --max-delay=500"
+      deploy_persistent
       log_warn "$tor_ok/$TOR_COUNT Tor instances on ports $TOR_PORTS"
-      if ! command -v cloudflared &>/dev/null; then
-        log_warn "cloudflared not found — dashboard only (no tunnel)"
-      fi
-      $DASHBOARD &
-      DASH_PID=$!
-      sleep 1
-      if command -v cloudflared &>/dev/null; then
-        cloudflared tunnel --url http://localhost:4000 &
-        CF_PID=$!
-        sleep 3
-        echo -e "  ${CYAN}Tunnel URL:${NC} https://<random>.trycloudflare.com (see above)"
-      fi
-      sleep 1
       echo -e "  ${CYAN}Dashboard:${NC} http://localhost:4000"
       log_step "Running headless bot + dashboard + Tor"
       run_bot $count --parallel "$workers" $extra --tor-ports="$TOR_PORTS" $delay_opts $(check_resume)
-      kill $DASH_PID $CF_PID 2>/dev/null; wait 2>/dev/null
-      log_step "Done"
       ;;
     K|k) kill_all ;;
     R|r) reset_csv ;;

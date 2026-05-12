@@ -62,9 +62,9 @@ async function snap(page, name) {
 
 const wait = ms => new Promise(r => setTimeout(r, ms));
 
-async function fillField(page, placeholder, value, label) {
+async function fillField(page, placeholder, value, label, nth = 0) {
   log(`  → ${label}: ${value}`);
-  const input = page.locator(`input[placeholder*="${placeholder}" i], textarea[placeholder*="${placeholder}" i]`).first();
+  const input = page.locator(`input[placeholder*="${placeholder}" i], textarea[placeholder*="${placeholder}" i]`).nth(nth);
   await input.waitFor({ state: 'visible', timeout: 8000 });
   await input.fill(value);
   await wait(randomInt(MIN_DELAY, MAX_DELAY));
@@ -281,28 +281,33 @@ async function runRegistration(browser, regIndex, totalCount) {
     await wait(1000);
 
     log(`${tag} 📝 Filling form fields...`);
-    const visInputs = await page.evaluate(() =>
+    const visPlaceholders = await page.evaluate(() =>
       [...document.querySelectorAll('input')].filter(i => i.offsetHeight > 0).map(i => i.placeholder)
     );
-    for (const placeholder of visInputs) {
+    const counters = {};
+    for (const placeholder of visPlaceholders) {
       if (/member|file/i.test(placeholder)) continue;
       const ph = placeholder.toLowerCase();
+      const key = ph.replace(/[^a-z]/g, '');
+      counters[key] = (counters[key] || 0) + 1;
+      const nth = counters[key] - 1;
+
       if (/college|institution/.test(ph)) {
-        await fillField(page, placeholder, regData.college, 'College');
+        await fillField(page, placeholder, regData.college, 'College', nth);
       } else if (/email/.test(ph)) {
-        await fillField(page, placeholder, regData.email, 'Email');
+        await fillField(page, placeholder, regData.email, 'Email', nth);
       } else if (/phone|mobile/.test(ph)) {
-        await fillField(page, placeholder, regData.phone, 'Phone');
+        await fillField(page, placeholder, regData.phone, 'Phone', nth);
       } else if (/sem|year/.test(ph)) {
-        await fillField(page, placeholder, regData.semester, 'Semester');
+        await fillField(page, placeholder, regData.semester, 'Semester', nth);
       } else if (/cse|branch|stream/.test(ph)) {
-        await fillField(page, placeholder, regData.branch, 'Branch');
+        await fillField(page, placeholder, regData.branch, 'Branch', nth);
       } else if (/name/.test(ph) && !/team/.test(ph) && !/college/.test(ph) && !/linkedin/.test(ph)) {
-        await fillField(page, placeholder, regData.fullName, 'Name');
+        await fillField(page, placeholder, regData.fullName, 'Name', nth);
       } else if (/linkedin/.test(ph)) {
         continue;
       } else if (/team.*(name|squad)/.test(ph)) {
-        await fillField(page, placeholder, `Team ${regData.fullName.split(' ')[0]}${randomInt(10, 99)}`, 'Team name');
+        await fillField(page, placeholder, `Team ${regData.fullName.split(' ')[0]}${randomInt(10, 99)}`, 'Team name', nth);
       }
     }
 
